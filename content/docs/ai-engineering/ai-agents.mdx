@@ -1,0 +1,343 @@
+---
+title: "AI Agents"
+description: "Covers agent architecture: the perceive-reason-act loop, tool use, planning strategies, memory systems, multi-agent orchestration, and the reliability/safety concerns unique to ..."
+---
+Covers agent architecture: the perceive-reason-act loop, tool use, planning strategies, memory systems, multi-agent orchestration, and the reliability/safety concerns unique to autonomous LLM systems — building directly on the Prompt Engineering guide's ReAct/function-calling sections and the RAG guide's agentic-RAG preview.
+
+---
+
+## Table of Contents
+1. [What an AI Agent Actually Is](#1-what-an-ai-agent-actually-is)
+2. [The Agent Loop: Perceive, Reason, Act](#2-the-agent-loop-perceive-reason-act)
+3. [Tools & Tool Design](#3-tools--tool-design)
+4. [Planning Strategies](#4-planning-strategies)
+5. [Memory Systems](#5-memory-systems)
+6. [Agent Architectures: Single-Agent Patterns](#6-agent-architectures-single-agent-patterns)
+7. [Multi-Agent Systems](#7-multi-agent-systems)
+8. [Orchestration Patterns](#8-orchestration-patterns)
+9. [State Management & Control Flow](#9-state-management--control-flow)
+10. [Reliability: Why Agents Fail](#10-reliability-why-agents-fail)
+11. [Error Handling & Self-Correction](#11-error-handling--self-correction)
+12. [Guardrails & Human-in-the-Loop](#12-guardrails--human-in-the-loop)
+13. [Agent Security](#13-agent-security)
+14. [Agent Frameworks (Landscape)](#14-agent-frameworks-landscape)
+15. [Evaluating Agents](#15-evaluating-agents)
+16. [When NOT to Use an Agent](#16-when-not-to-use-an-agent)
+17. [Rapid-Fire Interview Q&A](#17-rapid-fire-interview-qa)
+
+---
+
+## 1. What an AI Agent Actually Is
+
+**An AI agent**, in the current LLM-application sense, is a system where an LLM **dynamically decides** its own sequence of actions (which tools to call, in what order, whether to continue or stop) to accomplish a goal — as opposed to a **fixed, predetermined pipeline** where the sequence of steps is hardcoded by a developer in advance.
+
+**The defining distinction (the single most commonly asked foundational question in this entire guide — "what makes something an agent, versus just an LLM call in a pipeline"):**
+```
+Fixed pipeline: Step 1 (always retrieve) → Step 2 (always summarize) → Step 3 (always translate)
+                — the SEQUENCE and CHOICE of steps is fixed by the developer, regardless of the input
+
+Agent: The LLM itself decides, at each point: "given the current state, should I retrieve, summarize,
+       translate, ask a clarifying question, or am I actually done?" — the sequence and choice of
+       actions EMERGE from the model's own reasoning about the specific situation, not a fixed script
+```
+This directly extends the Prompt Engineering guide's Section 11 (ReAct) and the RAG guide's Section 10 (agentic RAG) — an agent is, at its core, an LLM run in a loop (Section 2) where its own output determines what happens next, rather than a human-authored, unconditional sequence of steps.
+
+**Interview trap:** *"Is any system that calls an LLM and then calls a function based on its output 'an agent'?"* This is genuinely debated terminology, but the commonly accepted, more precise distinction (worth stating explicitly, since interviewers often probe this) is: a **single** LLM call that decides to invoke **one** tool, with a human-authored program then handling everything after that fixed point, is closer to simple function calling/tool use (Prompt Engineering guide, Section 8) than a full "agent." What distinguishes a genuine **agent** is the **loop** — the LLM's decisions feed back into further LLM decisions, potentially many times, with the **model itself** (not hardcoded application logic) determining when the task is actually complete, how many steps are needed, and adapting its plan based on intermediate results. The degree of autonomy/looping is a spectrum, not a strict binary, and being able to articulate where a given system sits on that spectrum is itself a valued interview skill.
+
+---
+
+## 2. The Agent Loop: Perceive, Reason, Act
+
+The canonical agent execution loop — commonly asked to describe the general pattern, of which ReAct (Prompt Engineering guide, Section 11) is one specific, widely-adopted instantiation.
+
+```
+while not task_complete:
+    1. PERCEIVE:  gather current state — the original goal, conversation history, results of
+                  previous actions, any new external input
+    2. REASON:    the LLM processes this state and decides: what should happen next?
+                  (call a tool, ask the user a clarifying question, or conclude the task is done)
+    3. ACT:       if a tool was chosen, the application executes it and captures the result
+    4. OBSERVE:   the result of that action is added to the state, and the loop repeats
+```
+
+**Why this loop structure is necessary, rather than a single LLM call (commonly asked to justify, directly extending the ReAct discussion):** Complex, real-world tasks often can't be fully planned in a single upfront reasoning pass — the correct **next** step frequently depends on the **result** of the **previous** step (e.g., a search might return zero results, requiring a different search strategy; an API call might fail, requiring a fallback). The loop structure lets the agent's plan **genuinely adapt** based on real, freshly-observed outcomes, rather than committing to a rigid, upfront plan that has no mechanism to adjust when reality diverges from the plan's assumptions.
+
+**Termination conditions (a commonly asked, practically important design detail — how does the loop know when to stop?):**
+- **Model-decided completion**: The LLM itself determines the task is done (e.g., generates a "final answer" rather than another tool call) — the most common approach, but relies entirely on the model's own judgment being reliable, which connects directly to Section 10's reliability discussion.
+- **Maximum iteration limit**: A hardcoded safety limit (e.g., "stop after 10 loop iterations regardless") — a critical, commonly cited practical safeguard against **infinite loops** (an agent that keeps calling tools without ever reaching a natural stopping point, whether due to a genuinely difficult task, a buggy tool, or the model getting stuck in a repetitive pattern), directly analogous to timeout/circuit-breaker patterns in general distributed systems design.
+- **Budget-based limits**: Stopping based on accumulated cost/token usage/wall-clock time exceeding a threshold, rather than (or in addition to) a pure iteration count — a commonly cited practical production concern, since agent loops can have highly variable per-iteration cost.
+
+**Interview trap:** *"What happens if you don't set a maximum iteration limit on an agent loop?"* A very commonly tested practical/production concern: without an explicit safeguard, a poorly-behaving agent (stuck in a repetitive pattern, unable to make progress on a genuinely difficult sub-task, or affected by a flaky/failing tool) can loop **indefinitely**, incurring unbounded cost and latency with no natural termination — production agent systems universally need explicit, hardcoded upper bounds (iteration count, budget, or both) as a safety net, **independent of** trusting the model's own judgment about when to stop.
+
+---
+
+## 3. Tools & Tool Design
+
+*(Directly extends the Prompt Engineering guide's Section 8 function-calling mechanics — here focused on the practical craft of designing good tools for agent use, a very commonly asked practical topic.)*
+
+**A tool is defined by**: a **name**, a **natural-language description** (critical — this is what the model actually uses to decide *when* and *why* to invoke this tool, not just how), and a **parameter schema** (directly parallel to a FastAPI/Pydantic model definition, per the FastAPI guide's Section 5).
+
+```python
+{
+    "name": "search_flights",
+    "description": "Search for available flights between two cities on a specific date. Use this when the user asks about flight availability, prices, or schedules. Do NOT use this for booking — use book_flight for that.",
+    "parameters": {
+        "origin": {"type": "string", "description": "IATA airport code, e.g. 'JFK'"},
+        "destination": {"type": "string", "description": "IATA airport code, e.g. 'LAX'"},
+        "date": {"type": "string", "description": "Date in YYYY-MM-DD format"}
+    }
+}
+```
+
+**Why the description matters as much as (or more than) the technical schema (a commonly asked, practically important insight):** The model **only** has the tool's name/description/schema to decide **whether and when** to use it — unlike a human developer reading full source code/documentation, the model's entire understanding of a tool's purpose, appropriate use cases, and edge cases comes from this description text alone. A vague or ambiguous description (e.g., just `"searches things"`) leads directly to the model **misusing** the tool (calling it in inappropriate situations, or failing to call it when it genuinely should) — this is a direct, practical parallel to the Prompt Engineering guide's general "ambiguous instructions produce ambiguous behavior" principle, applied specifically to tool definitions.
+
+**Tool granularity — the core design trade-off (a commonly asked "how many tools, how big should each be" question):**
+- **Too few, overly broad tools** (e.g., a single generic `execute_database_query` tool taking raw SQL): maximally flexible, but pushes more reasoning burden and risk onto the model (it must correctly construct complex, potentially dangerous raw queries itself) and provides fewer natural guardrails.
+- **Too many, overly narrow tools** (e.g., a separate tool for every single possible database column filter): each individual tool is simple/safe, but a very large tool set increases the chance the model **selects the wrong tool** among many superficially similar options, and consumes more context-window budget just listing all the available tool definitions (directly connecting to the Prompt Engineering guide's Section 3 context-window discussion).
+- **The commonly cited practical guidance**: design tools around **meaningful, well-scoped actions** that mirror how a competent human would naturally decompose the task (e.g., `search_flights`, `book_flight`, `cancel_booking` — each a coherent, well-bounded unit of functionality) — neither a single do-everything tool nor an excessive proliferation of hyper-narrow tools, but a middle ground informed by the actual task's natural structure.
+
+**Tool output design (a commonly overlooked but practically important consideration):** What a tool **returns** matters as much as what it accepts — returning excessively verbose, unstructured, or irrelevant data forces the model to parse through noise (consuming context-window budget and risking the Prompt Engineering guide's "lost in the middle" issues), while returning cleanly structured, appropriately concise, relevant results makes subsequent reasoning steps more reliable — tool design is as much about the **response** shape as the request schema.
+
+**Interview trap:** *"If a model keeps misusing a particular tool, is the fix always to make the model 'smarter' (e.g., switch to a more capable model)?"* Not necessarily, and this is a commonly tested practical insight: tool **misuse** is very often a symptom of an **ambiguous tool description or poor tool granularity** (per the discussion above), not a fundamental model capability limitation — before reaching for a more capable (and typically more expensive/slower) model, a strong practical instinct is to first audit and improve the tool's description, parameter naming, and scope — often resolving the misuse issue directly, without needing to change the underlying model at all.
+
+---
+
+## 4. Planning Strategies
+
+How an agent decides its **sequence** of actions to accomplish a goal — commonly asked to compare different planning approaches and their trade-offs.
+
+**Reactive (no explicit upfront planning)**: The agent decides just the **next single step** at each iteration of the loop (Section 2), based purely on the current state — this is exactly what the base ReAct pattern does (Prompt Engineering guide, Section 11) — no explicit, multi-step plan is ever generated or stored; the "plan" emerges implicitly, one step at a time, from repeated reasoning.
+- **Pros**: Simple, naturally adaptive (each step incorporates the very latest information).
+- **Cons**: Can be inefficient/myopic for tasks with an obviously beneficial upfront structure (e.g., not recognizing that two sub-tasks could be done in parallel, since it's only ever considering "what's the single next step" rather than the task's overall shape).
+
+**Plan-and-Execute (explicit upfront planning, a commonly asked-about alternative pattern):** The agent first generates an **explicit, multi-step plan** (e.g., "1. Search for flights. 2. Search for hotels. 3. Compare total costs. 4. Present the best combined option.") **before** executing any individual step — then executes the plan (potentially re-planning if an early step's result invalidates a later assumption in the plan, blending back toward the reactive loop when needed).
+- **Pros**: Can produce more globally coherent, efficient action sequences (e.g., recognizing independent sub-steps that could be parallelized); the explicit plan is also more **inspectable/debuggable** by a human reviewer before any actual (potentially costly or irreversible) actions are taken — a meaningful practical/safety advantage.
+- **Cons**: More upfront LLM reasoning cost before any actual progress; less naturally adaptive if early assumptions turn out to be wrong (requiring explicit re-planning logic to recover gracefully).
+
+**Reactive vs Plan-and-Execute (the core trade-off, commonly asked to synthesize):** Reactive planning trades global coherence/efficiency for simplicity and maximal adaptiveness at each step; Plan-and-Execute trades some adaptiveness and upfront cost for more coherent, efficient, and **inspectable** action sequences — the right choice depends on task complexity (simple, short tasks favor reactive; complex, multi-part tasks with natural parallelism or high stakes favor explicit planning) and how important upfront human reviewability of the plan is for the specific use case (directly connecting to Section 12's human-in-the-loop discussion).
+
+**Interview trap:** *"Is explicit upfront planning strictly better than reactive, step-by-step reasoning?"* No — it's a genuine trade-off, not a strict improvement: explicit planning adds upfront cost and can be brittle if early plan assumptions prove wrong (requiring the system to detect this and explicitly re-plan, adding complexity), while reactive approaches are simpler and naturally adapt at every single step, at the cost of potentially less globally efficient/coherent action sequences — task complexity and the value of plan-inspectability (for safety/trust reasons) should drive the choice, not a blanket assumption that more upfront planning is always better.
+
+---
+
+## 5. Memory Systems
+
+*(Directly builds on the Prompt Engineering guide's Section 3 stateless-model discussion — memory in agent systems is entirely an application-layer construct, not something the underlying model provides natively.)*
+
+**Short-term / working memory**: The current agent loop's accumulated state — the conversation so far, tool call results, intermediate reasoning — held **within the current context window** (Prompt Engineering guide, Section 3) for the duration of the current task/session. This is fundamentally the same "memory is just re-sent context" mechanism discussed in that guide, scoped to the currently active agent run.
+
+**Long-term memory (a commonly asked, practically important extension beyond a single session)**: Information that needs to **persist across** separate agent sessions/conversations (e.g., a user's stated preferences from a previous conversation, learned facts about a specific ongoing project) — since the model itself is stateless between separate invocations, this requires an **external storage system** the agent can explicitly write to and query from, most commonly implemented via the exact vector-database/embedding infrastructure covered in the Embeddings guide — "remembering" something means **storing** it externally (often as an embedded, retrievable memory entry) and **retrieving** relevant past memories (via semantic search, directly reapplying the RAG guide's retrieval mechanics) to inject into the context window of a **future**, separate session.
+
+**Episodic vs Semantic memory (a commonly asked conceptual distinction, borrowed from cognitive-science terminology but commonly applied to agent-memory-system design):**
+- **Episodic memory**: Specific past events/interactions ("the user asked about X on this date, and I responded with Y") — useful for maintaining continuity and avoiding repetition across sessions.
+- **Semantic memory**: General facts/knowledge distilled and abstracted from past interactions ("this user generally prefers concise answers," "this user works in the finance industry") — often synthesized/summarized from many individual episodic memories over time, rather than stored as raw interaction logs.
+
+**Memory management challenges (commonly asked practical concerns, since naive "store everything" approaches don't scale):** Unbounded memory storage grows indefinitely and becomes both expensive to store and **noisy to retrieve from** (directly the same context-dilution concern from the RAG guide's Section 12) — production memory systems typically need explicit strategies for **summarization/consolidation** (periodically compressing older, granular episodic memories into more compact semantic summaries), **relevance-based retrieval** (only pulling in the specific memories relevant to the current context, via the same embedding-similarity retrieval mechanics as RAG, rather than dumping the entire memory history into every prompt), and sometimes explicit **forgetting/expiration** policies for memories that are no longer relevant or have become stale/outdated.
+
+**Interview trap:** *"Does an agent 'remembering' a user's preference across sessions mean the underlying model learned something?"* No — this is a direct, important extension of the Prompt Engineering guide's Section 5 in-context-learning distinction: the model's weights are entirely unchanged; "memory" here means the **application** explicitly stored information externally (in a database/vector store) and explicitly **re-injects** relevant portions of it into the prompt of future, otherwise-independent sessions — it's engineered, application-layer persistence, not any form of actual model learning or weight adaptation.
+
+---
+
+## 6. Agent Architectures: Single-Agent Patterns
+
+**Single-agent, tool-using (the most common, foundational pattern):** One LLM, equipped with a set of tools (Section 3), operating in a loop (Section 2) — the ReAct pattern from the Prompt Engineering guide is the canonical instance of this architecture. Appropriate for tasks that, while potentially multi-step, don't naturally decompose into genuinely **distinct roles/perspectives** requiring separate specialized reasoning.
+
+**Reflection / self-critique (a commonly asked-about single-agent refinement pattern):** After producing an initial output (a plan, a piece of code, a draft answer), the agent (using the same or, sometimes, a separate LLM call) explicitly **critiques its own output** against defined criteria, then **revises** based on that critique — potentially iterating this critique-and-revise cycle multiple times before finalizing.
+```
+Generate initial code → Critique: "Does this handle the edge case of an empty input list? No, it doesn't."
+→ Revise code to handle the edge case → Critique again → ... → Finalize
+```
+**Why self-critique can improve output quality (commonly asked to articulate the mechanism, directly extending the Prompt Engineering guide's Section 1 autoregressive-generation insight):** Generating a critique is, mechanistically, just another instance of conditioning further generation on additional context — but explicitly prompting the model to **evaluate against specific criteria**, in a separate step from the original generation, can surface issues the model's original, single-pass generation didn't catch (similar in spirit to how a human writer often catches their own errors more effectively during a dedicated **review pass** than while still in the initial drafting flow) — it's not a fundamentally different capability, but a structurally different **use** of the same generation mechanism that empirically improves output quality for many tasks.
+
+---
+
+## 7. Multi-Agent Systems
+
+Using **multiple**, distinct LLM agent instances — often with different system prompts/personas/tool access, per the Prompt Engineering guide's Section 9-10 — that **collaborate** (via some communication/coordination mechanism) to accomplish a task, rather than a single agent handling everything.
+
+**Why use multiple agents instead of one more capable single agent (the core motivating question, very commonly asked):**
+- **Specialization**: Different agents can have narrowly-scoped system prompts, tool access, and context specifically tailored to a sub-task (e.g., a "research agent" with web-search tools and a research-focused persona, vs. a "writing agent" with a different persona focused purely on prose quality) — directly mirroring the general software-engineering Single Responsibility Principle (OOP guide) applied to agent design, rather than one agent's system prompt/context trying to juggle every distinct concern simultaneously.
+- **Context isolation**: Each agent's context window only needs to contain information relevant to **its own** sub-task, rather than one agent accumulating an enormous, increasingly diluted context trying to handle an entire complex, multi-faceted task alone — directly mitigating the "lost in the middle"/context-dilution concerns from the Prompt Engineering and RAG guides.
+- **Parallel execution**: Independent sub-tasks assigned to different agents can potentially run **concurrently**, reducing overall wall-clock latency compared to one agent handling every sub-task sequentially.
+- **Modularity/debuggability**: Directly parallels the Prompt Engineering guide's Section 13 prompt-chaining rationale — smaller, focused components are easier to individually test, debug, and improve than one large, monolithic agent trying to do everything.
+
+**The clear trade-off (worth stating for a balanced, commonly expected answer):** Multi-agent systems introduce genuine **coordination complexity** — agents must communicate (Section 8), and a poorly-designed coordination mechanism can introduce its own new failure modes (miscommunication between agents, redundant/conflicting work, difficulty determining which agent is ultimately responsible when something goes wrong) — not a strict, unconditional improvement over a well-designed single agent, especially for tasks that don't naturally decompose into genuinely distinct roles/specializations.
+
+**Interview trap:** *"Are multi-agent systems always more capable/reliable than a well-designed single agent?"* No — this is a very commonly tested, nuanced point: multi-agent systems add real coordination overhead and new potential failure modes (Section 10), and for tasks that don't have a natural, meaningful decomposition into distinct roles, a single well-designed agent with good tools and a clear system prompt is often **simpler, cheaper, and just as effective** — multi-agent architectures earn their added complexity specifically when a task genuinely benefits from specialization, context isolation, or parallelism, mirroring this guide's recurring theme (also present in the RAG guide's Section 10 agentic-RAG discussion) of matching architectural complexity to actual task complexity rather than defaulting to the most sophisticated pattern by reflex.
+
+---
+
+## 8. Orchestration Patterns
+
+How multiple agents (Section 7) are actually **coordinated** — commonly asked to name and compare specific patterns.
+
+**Sequential / pipeline**: Agents run in a fixed order, each consuming the previous agent's output as input — directly the multi-agent extension of the Prompt Engineering guide's Section 13 prompt-chaining, just with each "step" being a full agent (potentially with its own internal tool-use loop) rather than a single LLM call.
+
+**Orchestrator/Manager pattern (a very commonly asked, widely-used architecture):** A dedicated "orchestrator" or "manager" agent doesn't do the substantive task work itself — instead, it **decomposes** the overall goal into sub-tasks and **delegates** each sub-task to the appropriate specialized "worker" agent, then **synthesizes** the workers' individual results into a final combined output. This directly mirrors general management/delegation structures, and provides a clear, centralized point of control/coordination logic, rather than requiring worker agents to coordinate directly among themselves.
+```
+Orchestrator: "This task needs research and then writing. I'll delegate research to the Research Agent,
+              then pass its findings to the Writing Agent, then review the combined result."
+```
+
+**Peer-to-peer / debate (a commonly asked-about, more experimental pattern):** Multiple agents (sometimes with **deliberately different** perspectives/personas) discuss, critique, or even explicitly "debate" a question or proposed solution with each other, with the goal of surfacing flaws or arriving at a more robust conclusion than any single agent's isolated first attempt — conceptually related to Section 6's single-agent self-critique pattern, but distributed across genuinely separate agent instances/perspectives rather than one agent critiquing itself.
+
+**Interview trap:** *"Is the orchestrator/manager pattern always the right choice for multi-agent coordination?"* It's the most commonly used and generally most **predictable/controllable** pattern (a clear, centralized decision-maker, easier to debug and reason about than fully decentralized peer-to-peer coordination) — but it does introduce the orchestrator itself as a potential **bottleneck/single point of failure** in the coordination logic, and adds an extra LLM-reasoning step (the orchestrator's own decomposition/delegation decisions) on top of the actual worker agents' task execution — the right pattern still depends on the specific task's structure and how much centralized control/predictability is actually valuable for that use case, consistent with this guide's recurring trade-off-driven framing.
+
+---
+
+## 9. State Management & Control Flow
+
+A commonly asked practical/architectural topic, especially relevant for engineers implementing (not just conceptually understanding) agent systems.
+
+**Why explicit state management matters (directly connects to Section 5's memory discussion and the general stateless-model theme):** An agent loop's entire behavior across iterations depends on correctly tracking and passing forward the accumulated state (conversation history, tool results, intermediate variables, current plan/progress) — since the model itself holds no state between individual calls, the **application** is entirely responsible for this bookkeeping, and bugs in state management (losing track of previous results, incorrectly overwriting state, race conditions in concurrent multi-agent scenarios) are a commonly cited, very practical source of agent failures distinct from the model's own reasoning quality.
+
+**Graph-based agent control flow (a commonly asked-about modern pattern, worth knowing the general idea, since several popular frameworks — Section 14 — are explicitly built around this model):** Rather than a simple linear loop, an agent's possible states and transitions are modeled explicitly as a **graph** (directly reapplying the DSA guide's general graph concepts) — nodes represent distinct processing steps/states (e.g., "gather requirements," "generate plan," "execute step," "review result"), and edges represent the possible transitions between them, often with **conditional logic** determining which edge to follow next based on the current state (e.g., "if the review step found no issues, transition to 'finalize'; if it found issues, transition back to 'execute step' for revision"). This provides more **explicit, inspectable, and controllable** structure than an unconstrained "the LLM decides literally anything at every step" loop, while still allowing genuine conditional branching/looping behavior driven by the model's own reasoning at each node.
+
+**Why this graph-based structure is valuable (commonly asked to articulate the benefit over a simpler, unconstrained loop):** It lets developers impose **deliberate guardrails** on the space of possible agent behaviors (e.g., explicitly disallowing certain transitions that would be unsafe or nonsensical, or guaranteeing certain steps — like a safety review — always occur before certain other steps can be reached) while still preserving genuine adaptive, model-driven decision-making **within** that constrained structure — a middle ground between a fully unconstrained, unpredictable agent loop and a fully rigid, non-adaptive fixed pipeline (Section 1's foundational distinction), directly addressing many of Section 10's reliability concerns through structural, architectural means rather than relying purely on prompting the model to "please behave reliably."
+
+---
+
+## 10. Reliability: Why Agents Fail
+
+A very commonly asked category — being able to name **specific, concrete** agent failure modes (not just "the model can be wrong") is a strong signal of genuine practical experience with agentic systems.
+
+**Compounding errors across loop iterations (a foundational, commonly cited failure mode):** In a multi-step agent loop, each step's output feeds into the next step's input/context — an error or misjudgment at an **early** step doesn't just affect that step in isolation; it **propagates and compounds** through every subsequent step that builds on it, since the agent has no independent mechanism to notice "wait, my earlier reasoning was actually flawed" unless explicitly designed to do so (Section 11). A modest per-step error rate can compound into a surprisingly high overall task-failure rate across a long sequence of steps — directly analogous to reliability calculus in distributed systems (a chain of N components, each 99% reliable, has combined reliability significantly below 99% for large N).
+
+**Tool misuse / incorrect tool selection**: Covered in Section 3 — calling the wrong tool, providing malformed/incorrect arguments, or failing to call a needed tool at all.
+
+**Getting stuck in repetitive loops**: The agent repeatedly attempts a similar (failing) action without making genuine progress or recognizing the pattern of repeated failure — directly motivating Section 2's hardcoded iteration-limit safeguard, since relying on the model to independently notice "I appear to be stuck" is not fully reliable.
+
+**Context window exhaustion / context dilution over long-running tasks**: A long-running agent's accumulated state (conversation history, tool results) can grow to consume a large portion of the context window (Prompt Engineering guide, Section 3), eventually requiring truncation/summarization — and even before hitting a hard limit, an excessively long, noisy accumulated context can degrade reasoning quality via the same "lost in the middle" dynamics discussed throughout this guide series.
+
+**Over-confidence / insufficient uncertainty signaling**: An agent may proceed confidently with an action based on ambiguous or insufficient information, rather than recognizing genuine uncertainty and either seeking clarification (from a human, per Section 12) or gathering more information first — directly connecting to the RAG guide's Section 13 "I don't know" handling discussion, now applied to an agent's own action-taking rather than just its final answer generation.
+
+**Interview trap:** *"If an agent has a 95% success rate on each individual step, is a 10-step task also roughly 95% likely to succeed overall?"* No — this is a commonly tested, important quantitative insight directly following from the compounding-errors discussion: assuming step failures are roughly independent, the overall task success rate is closer to `0.95^10 ≈ 0.60` — a seemingly high per-step reliability can still produce a substantially **lower** overall multi-step task reliability, which is precisely why minimizing the **number of steps** genuinely required (Section 3's tool-granularity discussion, Section 4's planning-efficiency discussion) and building in explicit error-recovery mechanisms (Section 11) are both practically important levers, not just theoretical nice-to-haves, for reliable agent system design.
+
+---
+
+## 11. Error Handling & Self-Correction
+
+Commonly asked practical techniques for making agent systems more robust to the failure modes described in Section 10.
+
+**Tool-call retry logic**: Directly parallels general distributed-systems retry patterns (Networking guide's general resilience concepts) — if a tool call fails (a network error, an API rate limit, a malformed response), the application can automatically retry (potentially with backoff) before surfacing the failure to the agent's own reasoning at all — many transient failures don't need to consume the agent's own reasoning/decision-making budget if they can be resolved via straightforward infrastructure-level retry logic.
+
+**Feeding errors back into the agent's context (a commonly asked, agent-specific pattern, distinct from pure infrastructure retry):** When a tool call fails in a way that **isn't** simply a transient infrastructure issue (e.g., the tool succeeded but returned a result indicating the requested action was invalid, like "no flights found for that date"), the **error/result itself** is fed back into the agent's context as an observation (directly the ReAct loop's Observation step, Prompt Engineering guide Section 11) — allowing the agent's **own reasoning** to adapt (e.g., trying a different date, or concluding the task genuinely cannot be completed and reporting that back to the user) rather than the failure simply crashing the entire process.
+
+**Self-verification / output checking (a commonly asked refinement, extending Section 6's self-critique pattern specifically to error-catching):** Before finalizing an action or answer, having the agent (or a separate, dedicated verification step/model call) explicitly check the proposed output against known constraints or the original goal — e.g., "does this generated SQL query actually only touch tables the user is authorized to access?" — catching certain classes of errors **before** they result in an actual harmful or incorrect action, rather than only handling errors reactively after they've already occurred.
+
+**Interview trap:** *"Is retrying a failed tool call always the right response to a tool failure?"* No — this is an important, commonly tested nuance: **transient** failures (network timeouts, temporary rate limits) are good candidates for straightforward automatic retry; but failures indicating a **genuine, non-transient problem** (invalid arguments, a fundamentally unavailable resource, an authorization failure) will simply fail again identically on retry, wasting time/cost — these instead need to be surfaced as a meaningful **observation** for the agent's own reasoning to adapt to (a different approach, different arguments, or an honest "this cannot be done" conclusion), not blindly retried — distinguishing between these two failure categories is a practically important design decision, not a one-size-fits-all retry-everything policy.
+
+---
+
+## 12. Guardrails & Human-in-the-Loop
+
+*(Directly extends the Prompt Engineering guide's Section 14 mitigation discussion, and the general Security guide's principle of least privilege, applied specifically to autonomous agent actions.)*
+
+**Why guardrails matter specifically for agents (more so than for a simple, single-turn LLM Q&A system, commonly asked to articulate the distinction):** An agent doesn't just **generate text** — it can **take real, consequential actions** in the world (sending emails, making purchases, modifying databases, executing code) via its tools (Section 3). The stakes of an agent's error are therefore often meaningfully higher than a chatbot simply producing an incorrect **sentence** — an incorrect **action** can have real, sometimes irreversible, real-world consequences, directly motivating a more robust safety/control apparatus than pure prompting alone can reliably provide (echoing the Prompt Engineering guide's Section 14 point that prompting-based behavioral tendencies are not hard technical guarantees).
+
+**Permission scoping / least privilege (a direct, commonly asked application of the Security guide's core principle):** An agent should only have access to the **minimum** set of tools, data, and permissions actually necessary for its intended task scope — e.g., an agent designed to **draft** email replies for human review shouldn't also have unrestricted permission to actually **send** emails autonomously — bounding the potential damage from any single failure (a prompt injection, Prompt Engineering guide Section 14, a reasoning error, a tool misuse) to whatever is within that deliberately narrow permission scope.
+
+**Human-in-the-loop confirmation gates (a very commonly asked, practically central mitigation):** Requiring **explicit human approval** before the agent executes any action deemed high-stakes, irreversible, or costly (sending a message, making a financial transaction, deleting data, deploying code) — while lower-stakes, easily-reversible actions (searching, reading, drafting a preview) can proceed autonomously without requiring a human checkpoint. This tiered approach (autonomous for low-risk actions, human-gated for high-risk ones) is a commonly cited, practical balance between genuine agent usefulness/autonomy and safety, rather than an all-or-nothing choice between fully autonomous and fully human-supervised operation.
+
+**Explicit action allowlists/denylists**: Beyond just scoping which tools are available at all, some systems implement additional runtime checks on the **specific parameters/content** of a proposed action (e.g., a denylist of especially sensitive database tables an agent's generated SQL should never be allowed to touch, checked programmatically **before** actual execution, independent of whether the agent's own reasoning "should" have avoided it) — a defense-in-depth layer that doesn't rely purely on trusting the model's own judgment/instruction-following.
+
+**Interview trap:** *"Is instructing an agent in its system prompt to 'always ask for confirmation before taking risky actions' a sufficient safeguard on its own?"* No — this is a direct, important extension of the Prompt Engineering guide's Section 14 point: a prompted instruction is a **behavioral tendency**, not a hard technical guarantee, and is subject to the same reliability/injection concerns discussed there — genuinely robust guardrails require **structural, application-layer enforcement** (permission scoping that makes an action literally impossible regardless of what the model decides, or a hardcoded confirmation-gate step in the control flow, per Section 9's graph-based architecture discussion) **in addition to**, not instead of, prompted instructions — relying purely on the model choosing to comply with a safety instruction is not considered a sufficiently robust safeguard for genuinely high-stakes actions.
+
+---
+
+## 13. Agent Security
+
+*(A focused synthesis of Security-guide principles and Prompt Engineering guide Section 14, specifically as they apply to the expanded attack surface of tool-using, autonomous agents.)*
+
+**The expanded attack surface (commonly asked to articulate why agents specifically raise the stakes of prompt injection beyond a simple chatbot):** A prompt-injected simple chatbot might be tricked into saying something inappropriate or revealing its system prompt — real but generally **contained** harm. A prompt-injected **agent**, with access to real tools and real permissions, can potentially be manipulated into **taking real, consequential actions** — sending data to an attacker-controlled destination, executing unintended financial transactions, deleting or modifying real data — directly connecting Section 12's stakes discussion to the Prompt Engineering guide's indirect-injection scenario (e.g., a malicious instruction embedded in a webpage or document the agent processes as part of a legitimate task, per that guide's Section 14).
+
+**Indirect injection is a particularly acute concern for agents specifically (worth stating explicitly, since it's a commonly asked "why does this matter more here" follow-up):** An agent that browses the web, reads documents, or processes any external, untrusted content as part of its normal operation (exactly the kind of task agents are commonly built for) has a correspondingly large surface area for encountering attacker-planted indirect injection content — every piece of external content the agent processes is a potential injection vector, and unlike a simple chatbot, the **consequence** of a successful injection against an agent can be a real, executed action rather than merely an inappropriate text response.
+
+**Defense strategies (directly reapplying and reinforcing Sections 11-12, and the Prompt Engineering guide's Section 14, specifically in this agent-security context):** Least-privilege tool/permission scoping (Section 12) remains the single most load-bearing mitigation — bounding the **consequence** of a successful injection, since fully preventing injection itself remains an unsolved problem (Prompt Engineering guide, Section 14); human-in-the-loop confirmation for high-stakes actions (Section 12); careful delimiting/structural separation of untrusted content the agent processes from its actual instructions; and treating any tool result/observation the agent receives as potentially containing untrusted, even adversarial, content — not implicitly "safe" simply because it came from a tool the developer built, if that tool's output can itself be influenced by external, attacker-reachable data.
+
+**Interview trap:** *"If an agent's tools are all internally-built (not third-party), is prompt injection no longer a concern?"* No — this is a commonly overlooked but important nuance: even entirely internally-built tools can return data that **originates from, or was influenced by, untrusted external sources** (a database record containing user-submitted content, a document uploaded by an external party, a webpage fetched during a search) — the tool's own trustworthiness (was it built correctly, does it have bugs) is a separate concern from the trustworthiness of the **data it returns**, which can still be adversarially influenced regardless of how trusted the tool's own implementation is — the relevant security boundary is about the **provenance and trustworthiness of the actual content**, not merely which team wrote the tool that happened to fetch/return it.
+
+---
+
+## 14. Agent Frameworks (Landscape)
+
+A commonly asked practical/ecosystem-awareness question — being able to name a few major frameworks and their general positioning, without needing exhaustive feature-by-feature comparison.
+
+| Framework | Notable characteristics |
+|---|---|
+| **LangChain / LangGraph** | LangChain provides broad general-purpose LLM-application building blocks (chains, tool integrations, memory); LangGraph specifically implements the graph-based control-flow model discussed in Section 9, for more explicit, controllable multi-step/multi-agent orchestration. |
+| **AutoGen** | Focused specifically on multi-agent conversation patterns (Section 7-8) — multiple agents configured to converse with each other toward a shared goal, with flexible conversation-pattern configuration. |
+| **CrewAI** | Built around an explicit "crew of agents with defined roles" abstraction — a relatively opinionated, higher-level framework specifically for the orchestrator/specialized-worker-agents pattern (Section 8). |
+| **OpenAI Assistants API / Agents SDK** | A more managed, higher-level approach where much of the loop/state-management/tool-execution infrastructure (Sections 2, 9) is handled by the API provider directly, trading some flexibility for reduced implementation complexity. |
+| **Semantic Kernel** | Microsoft's framework, with a particular emphasis on integrating agentic patterns into existing enterprise/.NET-centric application architectures. |
+
+**Interview trap:** *"Do you need a framework to build an agent, or can you build one from scratch?"* Worth being able to articulate both sides for a balanced answer: the **core agent loop** (Section 2) is conceptually simple enough to implement directly with raw LLM API calls (a while-loop, some state-tracking, and function-calling per the Prompt Engineering guide's Section 8) — frameworks primarily add value through **pre-built integrations** (many tool/data-source connectors), **standardized patterns** for common needs (memory management, multi-agent orchestration, graph-based control flow), and reduced boilerplate — the trade-off is the framework's own added abstraction complexity/learning curve and potential inflexibility versus a fully custom implementation's greater control but higher implementation effort — a reasonable, commonly-expected engineering trade-off discussion, not a question with one universally correct answer.
+
+---
+
+## 15. Evaluating Agents
+
+*(Directly extends the RAG guide's Section 16 evaluation-decomposition principle, and previews the dedicated Evaluation guide — agent evaluation inherits RAG's "decompose by pipeline stage" philosophy, but must additionally account for the agent's own decision-making/planning quality.)*
+
+**Task success rate (the most fundamental, outcome-level metric)**: Did the agent actually accomplish the intended goal, evaluated end-to-end — the most direct measure of practical usefulness, but (like the RAG guide's discussion of end-to-end answer quality alone) doesn't by itself diagnose **where** in a multi-step process a failure occurred.
+
+**Trajectory/process evaluation (a commonly asked, agent-specific evaluation dimension beyond simple pass/fail outcome checking):** Evaluating the **sequence of actions/reasoning** the agent actually took, not just its final outcome — did it use tools appropriately and efficiently, did it recover sensibly from an error, did it take an unnecessarily convoluted path to a correct answer, did it request human confirmation appropriately for a high-stakes action? A correct final outcome reached via a genuinely poor or unsafe process (e.g., succeeding "by luck" after a series of questionable decisions, or bypassing a guardrail that should have triggered) is a meaningfully different, and generally more concerning, signal than the same outcome reached via a clean, well-reasoned, appropriately-cautious trajectory — directly analogous to the RAG guide's decomposed-evaluation philosophy, now applied to the **process** of multi-step agentic decision-making rather than just the retrieval/generation split.
+
+**Efficiency metrics**: Number of steps/tool calls taken, total cost, total latency to complete a task — directly connects to Section 10's compounding-error discussion (fewer, more efficient steps generally correlate with higher reliability) and is a genuinely important practical/production metric independent of pure task-success-rate, since two agents achieving identical success rates at very different cost/latency profiles are not equivalently good production choices.
+
+**LLM-as-judge for agent evaluation (previewing the Evaluation guide's general treatment of this technique, applied specifically here):** Given the difficulty of writing purely programmatic/rule-based checks for open-ended agentic task success or trajectory quality, using a separate LLM call to **assess** an agent's transcript (its full sequence of reasoning, actions, and observations) against defined success/quality criteria is a commonly used, practical evaluation technique — directly analogous to the RAG guide's Section 16 discussion of using LLM-as-judge for faithfulness/groundedness assessment, now applied to judging an entire multi-step agentic trajectory rather than a single generated answer.
+
+**Interview trap:** *"If an agent achieves a high task-success rate in evaluation, is that sufficient evidence it's ready for production deployment?"* Not necessarily on its own — a strong, complete answer notes that task-success-rate alone doesn't capture **trajectory quality** (did it take unsafe or inefficient paths to get there), **cost/efficiency** (how expensive/slow was each success), or **robustness to edge cases/adversarial input** (Section 13) not well-represented in the evaluation set — genuinely thorough agent evaluation, echoing the RAG guide's decomposed-metrics philosophy, examines outcome success **alongside** process quality, efficiency, and security robustness, rather than optimizing for a single aggregate success-rate number in isolation.
+
+---
+
+## 16. When NOT to Use an Agent
+
+A commonly asked, deliberately balancing question — directly extending this guide's recurring theme (also present in the RAG guide's Section 10 and this guide's Section 7) of matching architectural complexity to genuine task complexity, rather than defaulting to the most sophisticated available pattern.
+
+**Agents are usually overkill (and often actively worse — slower, more expensive, less predictable) for:**
+- **Tasks with a genuinely fixed, well-known sequence of steps**: If the correct sequence of operations is actually always the same regardless of input specifics, a fixed pipeline (Section 1's opening distinction) is simpler, faster, cheaper, and far more predictable/debuggable than an agent "rediscovering" the same correct sequence via its own reasoning on every single run — paying the cost and accepting the reduced predictability of autonomous decision-making for a decision that isn't actually variable provides no genuine benefit.
+- **Tasks requiring strict, guaranteed reliability with low tolerance for any error**: Given Section 10's compounding-error dynamics, a long agent loop is intrinsically **less** predictable/reliable than a shorter, well-tested fixed pipeline for tasks where the correct process is genuinely known in advance — agents earn their value specifically from handling **genuine variability/unpredictability** in required steps, not from being an unconditionally "smarter" way to execute a task whose steps are actually fixed.
+- **Simple, single-step tasks**: A single, well-crafted prompt (Prompt Engineering guide) or a single function call is sufficient and meaningfully cheaper/faster/more predictable than standing up a full agent loop for a task that doesn't actually require multiple, adaptively-determined steps.
+
+**Interview trap:** *"Since agents are more flexible and 'intelligent,' should they be the default choice for building new LLM-powered features?"* No — and being able to argue this convincingly is itself a strong interview signal, directly echoing this guide's Section 7 and the RAG guide's Section 10 recurring theme: agentic architectures trade predictability, cost-efficiency, and reliability (Section 10) for adaptive flexibility — a trade worth making specifically when a task's required steps **genuinely** can't be known/fixed in advance, but actively counterproductive overhead when they can be. The strongest, most senior-level answer to "should this be an agent" is a deliberate trade-off analysis of the **specific task's actual variability**, not a default assumption that more autonomy/sophistication is inherently better.
+
+---
+
+## 17. Rapid-Fire Interview Q&A
+
+**Q: What's the core distinguishing feature of an "agent" versus a fixed LLM pipeline?**
+The agent's own reasoning determines the sequence, choice, and number of actions taken (and when the task is complete), rather than a developer hardcoding a fixed sequence of steps in advance.
+
+**Q: Why does an agent loop need a hardcoded maximum iteration/budget limit?**
+Without one, a poorly-behaving agent (stuck in a repetitive pattern, facing a genuinely difficult sub-task, or hitting a flaky tool) can loop indefinitely, incurring unbounded cost/latency — this safeguard is needed independent of trusting the model's own judgment about when to stop.
+
+**Q: Why does a tool's natural-language description matter as much as its technical parameter schema?**
+The model relies entirely on that description to decide whether and when to use the tool — a vague description leads directly to tool misuse (wrong tool selected, or a needed tool never called), regardless of how well-specified the technical parameters are.
+
+**Q: Why can a 10-step agent task have meaningfully lower overall reliability than any single step's success rate would suggest?**
+Errors compound multiplicatively across sequential steps (a 95%-per-step success rate compounds to roughly 60% over 10 steps) — this is why minimizing genuinely necessary steps and building explicit error-recovery mechanisms are practically important, not just theoretical concerns.
+
+**Q: Why are multi-agent systems not unconditionally better than a single well-designed agent?**
+They introduce genuine coordination complexity and new potential failure modes (miscommunication, redundant/conflicting work); they earn their added complexity specifically when a task benefits from genuine specialization, context isolation, or parallelism — not as a universal upgrade.
+
+**Q: Why is prompt injection a more consequential concern for agents than for a simple chatbot?**
+An injected chatbot might produce an inappropriate text response; an injected agent, with real tool access and permissions, can potentially be manipulated into taking real, consequential, sometimes irreversible actions — directly raising the stakes of a successful injection.
+
+**Q: Is a system-prompt instruction like "always confirm before risky actions" a sufficient safeguard on its own?**
+No — it's a behavioral tendency reinforced by training, not a hard technical guarantee; genuinely robust guardrails require structural, application-layer enforcement (permission scoping, hardcoded confirmation gates) in addition to prompted instructions, not instead of them.
+
+**Q: Why doesn't a high task-success-rate alone guarantee an agent is production-ready?**
+It doesn't capture trajectory quality (safe/efficient path to the outcome), cost/efficiency, or robustness to adversarial/edge-case input — thorough evaluation examines process quality and security robustness alongside outcome success, not outcome success in isolation.
+
+**Q: When should you NOT use an agentic architecture?**
+When a task's correct sequence of steps is genuinely fixed and known in advance, or when strict, predictable reliability matters more than adaptive flexibility — a fixed pipeline is simpler, cheaper, faster, and more reliable for tasks that don't actually require adaptively-determined steps.
+
+---
+
+## Suggested Study Approach
+1. Be able to articulate the core agent-vs-pipeline distinction (Section 1) and the compounding-error reliability math (Section 10) fluently — these two ideas are the conceptual foundation nearly every other topic in this guide builds on or returns to.
+2. Practice explaining why tool description quality matters as much as schema correctness (Section 3), and the reactive-vs-plan-and-execute trade-off (Section 4) — both are commonly asked, practically-grounded design questions distinguishing genuine hands-on experience from purely theoretical knowledge.
+3. Rehearse the security-focused questions (Section 13) with specific attention to *why* agents raise the stakes of prompt injection beyond a simple chatbot — this is a very commonly asked, high-signal synthesis question connecting the Security guide, Prompt Engineering guide, and this guide together.
+4. Pair this guide with the Prompt Engineering guide (ReAct, function calling, and prompt injection are all directly extended here) and the RAG guide (agentic RAG, Section 10 there, is a direct, retrieval-focused special case of everything covered in this guide more generally) — and keep Section 16's "when not to use an agent" framing ready as a deliberate counterbalance to demonstrate mature, trade-off-aware engineering judgment rather than reflexive enthusiasm for the most sophisticated pattern available.
+5. Be ready to walk through a concrete example end-to-end — pick a realistic multi-step task, and narrate how you'd design its tools, choose a planning strategy, decide on single- vs multi-agent architecture, and identify what guardrails it would need — this kind of applied, structured design-reasoning is far more commonly and effectively probed in practice than isolated definition recall.

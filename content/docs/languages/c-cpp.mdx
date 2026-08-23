@@ -1,0 +1,710 @@
+---
+title: "C / C++"
+description: "Core language fundamentals for C and C++ interview rounds: memory model, pointers, compilation, C++ OOP mechanics, memory management, and the STL — with code examples and the cl..."
+---
+Core language fundamentals for C and C++ interview rounds: memory model, pointers, compilation, C++ OOP mechanics, memory management, and the STL — with code examples and the classic gotchas interviewers probe.
+
+---
+
+## Table of Contents
+1. [Compilation Process](#1-compilation-process)
+2. [Memory Layout of a Program](#2-memory-layout-of-a-program)
+3. [Pointers](#3-pointers)
+4. [Pointers vs References (C++)](#4-pointers-vs-references-c)
+5. [Arrays & Pointer Arithmetic](#5-arrays--pointer-arithmetic)
+6. [`const` Correctness](#6-const-correctness)
+7. [Dynamic Memory Management](#7-dynamic-memory-management)
+8. [Structs vs Classes (C++)](#8-structs-vs-classes-c)
+9. [Constructors & Destructors](#9-constructors--destructors)
+10. [The Rule of Three/Five/Zero](#10-the-rule-of-threefivezero)
+11. [Copy vs Move Semantics](#11-copy-vs-move-semantics)
+12. [Smart Pointers](#12-smart-pointers)
+13. [Virtual Functions & Polymorphism](#13-virtual-functions--polymorphism)
+14. [Function Overloading, Overriding, Templates](#14-function-overloading-overriding-templates)
+15. [`static` Keyword](#15-static-keyword)
+16. [`inline` Functions & Macros](#16-inline-functions--macros)
+17. [Storage Classes & Linkage](#17-storage-classes--linkage)
+18. [Structure Padding & Alignment](#18-structure-padding--alignment)
+19. [Undefined Behavior — Common Traps](#19-undefined-behavior--common-traps)
+20. [STL Essentials](#20-stl-essentials)
+21. [Multithreading Basics (C++)](#21-multithreading-basics-c)
+22. [Rapid-Fire Interview Q&A](#22-rapid-fire-interview-qa)
+
+---
+
+## 1. Compilation Process
+
+C/C++ source code goes through four distinct stages before becoming an executable (commonly asked to name in order):
+
+```
+Source (.c/.cpp) → Preprocessing → Compilation → Assembly → Linking → Executable
+```
+
+1. **Preprocessing**: Handles directives starting with `#` — `#include` (textually pastes in header contents), `#define` (macro substitution), `#ifdef`/`#ifndef` (conditional compilation). Output: expanded source code (a `.i` file).
+2. **Compilation**: Translates the preprocessed source into **assembly code** for the target architecture, performing syntax/semantic checks, optimizations. Output: a `.s` file.
+3. **Assembly**: The assembler converts assembly code into **machine code / object code** (`.o`/`.obj`), with unresolved references to external symbols left as placeholders.
+4. **Linking**: The linker combines one or more object files plus required libraries, **resolving external symbol references** (e.g., a call to `printf` gets linked to its actual implementation in the C standard library) into a single executable. This is where **"undefined reference" errors** typically surface — a symbol was declared/used but never defined anywhere the linker could find.
+
+**Static vs Dynamic Linking (commonly asked to compare):**
+| | Static Linking | Dynamic Linking |
+|---|---|---|
+| When resolved | At compile/link time — library code copied directly into the executable | At runtime — executable references a shared library (`.so`/`.dll`) loaded when the program runs |
+| Executable size | Larger (includes library code) | Smaller (library code lives externally) |
+| Updates | Requires recompiling to pick up a library update | Can update the shared library independently, without recompiling |
+| Startup | Slightly faster (nothing to resolve at runtime) | Slight overhead to locate/load the shared library |
+| Memory (multiple programs) | Each program has its own copy of library code | Multiple programs can share a single copy of the library in memory |
+
+**Header files vs source files:** Headers (`.h`/`.hpp`) typically contain **declarations** (function signatures, class definitions, macros) shared across multiple translation units; source files (`.c`/`.cpp`) contain **definitions** (actual implementation). **Include guards** (`#ifndef HEADER_H / #define HEADER_H / ... / #endif`, or `#pragma once`) prevent a header from being included multiple times in the same translation unit, which would otherwise cause duplicate-definition errors.
+
+---
+
+## 2. Memory Layout of a Program
+
+A running process's address space is divided into distinct segments (extremely commonly asked to draw/explain):
+
+```
+High addresses
++-------------------+
+|      Stack        |  ← grows downward; local variables, function call frames, return addresses
+|         ↓          |
+|                    |
+|         ↑          |
+|       Heap         |  ← grows upward; dynamically allocated memory (malloc/new)
++-------------------+
+|  BSS (uninitialized|  ← global/static variables with no explicit initializer (zero-initialized)
+|  global/static)    |
++-------------------+
+|  Data (initialized |  ← global/static variables WITH an explicit initializer
+|  global/static)    |
++-------------------+
+|       Text         |  ← compiled machine code (the program's instructions) — typically read-only
++-------------------+
+Low addresses
+```
+
+- **Text (Code) segment**: compiled instructions, typically **read-only** (attempting to write to it, e.g., via a corrupted function pointer, causes a segfault).
+- **Data segment**: global/static variables that have an explicit initial value (e.g., `int x = 5;` at global scope).
+- **BSS segment** ("Block Started by Symbol"): global/static variables **without** an explicit initializer — the OS zero-initializes this region, so these variables default to 0, without needing to store actual zero bytes in the executable file itself (a size optimization).
+- **Heap**: dynamically allocated memory (`malloc`/`new`), managed manually by the programmer (or smart pointers in C++) — grows upward, lifetime controlled explicitly (not tied to scope).
+- **Stack**: local variables, function parameters, return addresses — grows downward, managed automatically by the compiler; memory is reclaimed automatically when a function returns (LIFO, ties directly to the Stack data structure discussed in the DSA guide).
+
+**Stack Overflow (commonly asked to explain the cause):** Occurs when the stack grows beyond its allocated limit — typically from excessively deep (or infinite) recursion, or allocating very large local variables (e.g., a huge array) on the stack. This is distinct from a heap-related memory issue; the fix is usually to convert recursion to iteration, reduce recursion depth, or move large data to the heap.
+
+**Interview trap:** *"What's the difference between stack and heap memory in terms of speed?"* Stack allocation is essentially just moving a stack pointer — extremely fast, O(1), no bookkeeping needed. Heap allocation requires the memory allocator to search for a suitably sized free block, update internal bookkeeping structures, and is generally **slower** and subject to fragmentation over time — a key reason performance-critical code prefers stack allocation (or object pools) where feasible.
+
+---
+
+## 3. Pointers
+
+A pointer is a variable that stores a **memory address**.
+
+```c
+int x = 10;
+int *ptr = &x;      // ptr holds the address of x
+printf("%d\n", *ptr); // dereference: 10 (the value AT that address)
+*ptr = 20;            // modifies x through the pointer — x is now 20
+```
+
+**Key pointer concepts (commonly asked):**
+- **`&`** — address-of operator (gets a variable's address).
+- **`*`** — in a declaration, marks a variable as a pointer; in an expression, **dereferences** a pointer (accesses the value at the address it holds).
+- **Null pointer**: a pointer holding a special value (`NULL`/`nullptr`) indicating it doesn't point to any valid object — dereferencing it is undefined behavior (typically crashes/segfaults). Always check for null before dereferencing a pointer that might not have been assigned.
+- **Dangling pointer**: a pointer that still holds the address of memory that has already been freed/deallocated (or gone out of scope, e.g., a pointer to a local stack variable returned from a function) — dereferencing it is undefined behavior, and the bug is often intermittent/hard to reproduce since the memory might still "look" valid for a while before being reused.
+- **Void pointer (`void*`)**: a generic pointer that can point to any data type, but **cannot be dereferenced directly** without first being cast to a concrete type (since the compiler doesn't know the size/type of what it points to) — commonly used for generic/type-agnostic functions (e.g., `memcpy`, `qsort` in C).
+- **Pointer to pointer (`int **pp`)**: a pointer that holds the address of another pointer — used for things like modifying a pointer itself through a function call (since C passes arguments by value, passing a pointer's address lets a function change what the original pointer points to), or representing dynamic 2D arrays.
+
+**Function pointers:** A pointer that holds the address of a function, allowing functions to be passed as arguments, stored in data structures, or selected dynamically at runtime (the C-level mechanism underlying the Strategy pattern discussed in the Design Patterns guide, and the conceptual basis for callbacks).
+```c
+int add(int a, int b) { return a + b; }
+int (*funcPtr)(int, int) = add;
+printf("%d\n", funcPtr(3, 4)); // 7
+```
+
+---
+
+## 4. Pointers vs References (C++)
+
+C++ adds **references** as an alternative way to create an alias for an existing variable.
+
+```cpp
+int x = 10;
+int &ref = x;   // ref is now another name for x — not a separate variable
+ref = 20;       // modifies x directly — x is now 20
+```
+
+**Pointers vs References (extremely commonly asked comparison):**
+| | Pointer | Reference |
+|---|---|---|
+| Can be null | Yes | **No** — must be initialized to refer to a valid object at declaration, cannot be null (by the language rules, though it's technically possible to trigger undefined behavior and get a "null reference" via UB — not something to rely on) |
+| Can be reassigned | Yes — can point to a different object later | **No** — once bound, always refers to the same object; assignment (`ref = y`) changes the *referred-to object's value*, not what it refers to |
+| Needs explicit dereference | Yes (`*ptr`) | No — used just like the original variable |
+| Can do pointer arithmetic | Yes | No |
+| Memory address itself | Can be inspected (`&ptr` gives the pointer variable's own address) | Typically has no separate identity from the aliased variable (implementation detail — compilers often implement references as pointers under the hood, but the language treats them as aliases) |
+
+**When to use which (commonly asked to justify):** References are generally preferred when a valid object is guaranteed to exist and reassignment isn't needed (e.g., function parameters passed by reference to avoid copying, without needing null-checks) — cleaner syntax, safer (no risk of a dangling/null pointer in typical use). Pointers are needed when: the referenced object might not exist (nullable), the pointer needs to be reassigned to point elsewhere, or you need pointer arithmetic (e.g., iterating through an array/buffer).
+
+**Pass by value vs pass by reference vs pass by pointer (a very common C++ interview question):**
+```cpp
+void byValue(int x)   { x = 100; }  // modifies a local COPY — caller's variable unchanged
+void byPointer(int *x) { *x = 100; } // modifies the caller's variable through the pointer
+void byReference(int &x) { x = 100; } // modifies the caller's variable directly, cleaner syntax
+```
+
+---
+
+## 5. Arrays & Pointer Arithmetic
+
+An array name, in most expressions, **decays** into a pointer to its first element.
+
+```c
+int arr[5] = {10, 20, 30, 40, 50};
+int *p = arr;          // arr decays to &arr[0]
+printf("%d\n", *(p+2)); // 30 — pointer arithmetic: p+2 moves 2*sizeof(int) bytes forward
+printf("%d\n", arr[2]); // 30 — arr[i] is literally syntactic sugar for *(arr + i)
+```
+
+**Key fact — pointer arithmetic is type-aware:** `p + 1` doesn't move 1 byte forward; it moves `sizeof(*p)` bytes forward (e.g., 4 bytes for an `int*` on most systems) — the compiler automatically scales the arithmetic based on the pointed-to type.
+
+**Array decay pitfall (commonly asked "gotcha"):** Inside a function, an array parameter **decays to a pointer**, losing its size information — `sizeof(arr)` inside such a function returns the size of a pointer (e.g., 8 bytes on a 64-bit system), **not** the original array's total byte size. This is exactly why functions taking a C-style array typically also need an explicit length parameter (`void process(int *arr, int length)`), unlike `sizeof(arr)` called at the *original* array's declaration scope, which correctly returns the full array size.
+
+```c
+void func(int arr[]) {
+    printf("%lu\n", sizeof(arr)); // size of a POINTER (e.g., 8), NOT the array!
+}
+int main() {
+    int arr[10];
+    printf("%lu\n", sizeof(arr)); // size of the full array (e.g., 40 bytes for 10 ints)
+    func(arr);
+}
+```
+
+---
+
+## 6. `const` Correctness
+
+`const` declares that a value shouldn't be modified through that particular reference/pointer/variable — the compiler enforces this at compile time, catching accidental mutation bugs early.
+
+```cpp
+const int x = 10;         // x itself cannot be modified
+
+int y = 5;
+const int *p1 = &y;       // pointer to a const int — CANNOT modify *p1, CAN reassign p1 to point elsewhere
+int *const p2 = &y;       // const pointer to int — CAN modify *p2, CANNOT reassign p2
+const int *const p3 = &y; // const pointer to const int — can modify NEITHER
+
+class Foo {
+    int val;
+public:
+    int getVal() const { return val; }  // const member function — promises not to modify the object's state
+    // val = 5; would be a compile error inside a const member function
+};
+```
+
+**Reading `const` declarations (a classic trick interviewers use):** Read right-to-left starting from the variable name — `const int *p1` reads as "`p1` is a pointer to an `int` that is `const`" (the `const`-ness applies to what's pointed to). `int *const p2` reads as "`p2` is a `const` pointer to an `int`" (the pointer itself is const, not the pointee).
+
+**Why `const` correctness matters (commonly asked to justify beyond "it's good practice"):**
+- Catches unintended mutation bugs at **compile time** rather than at runtime.
+- Documents intent clearly — a function taking `const T&` signals to callers "I won't modify this," which matters for reasoning about code correctness and enables certain compiler optimizations.
+- Allows passing temporaries/literals to `const&` parameters (a non-const reference parameter cannot bind to a temporary value in standard C++).
+
+---
+
+## 7. Dynamic Memory Management
+
+### C: `malloc`/`calloc`/`realloc`/`free`
+```c
+int *arr = (int*)malloc(5 * sizeof(int));  // allocates uninitialized memory
+int *arr2 = (int*)calloc(5, sizeof(int));  // allocates AND zero-initializes memory
+arr = (int*)realloc(arr, 10 * sizeof(int)); // resizes a previous allocation (may move it)
+free(arr); // releases the memory back to the heap allocator — MUST be called to avoid leaks
+```
+**`malloc` vs `calloc` (commonly asked):** `malloc` allocates raw, **uninitialized** memory (contains garbage values); `calloc` additionally zero-initializes the allocated memory, and takes the count and element size as two separate arguments (partly as a convenience, partly historically to help detect overflow in the size calculation).
+
+### C++: `new`/`delete`
+```cpp
+int *p = new int(42);        // allocates a single int, initialized to 42
+int *arr = new int[10];      // allocates an array of 10 ints
+delete p;                    // deallocate a single object
+delete[] arr;                // deallocate an array — MUST use delete[] to match new[]
+```
+**Interview trap:** *"What happens if you use `delete` instead of `delete[]` on an array allocated with `new[]`?"* **Undefined behavior** — for arrays of objects with non-trivial destructors, `delete` (without `[]`) typically only calls the destructor for the first element and may corrupt the heap's internal bookkeeping, since `new[]` and `delete[]` cooperate on tracking the array's length (often via a hidden header before the returned pointer) in a way `delete` doesn't expect. Always match `new`↔`delete` and `new[]`↔`delete[]`.
+
+**Memory Leaks:** Occur when dynamically allocated memory is never freed and the program loses all references to it (making it impossible to free later) — the memory remains reserved for the entire program lifetime, potentially exhausting available memory in long-running programs (e.g., servers). This is the single most commonly cited motivation for RAII and smart pointers (Section 12).
+
+**`new`/`delete` vs `malloc`/`free` (commonly asked to distinguish, C++ specific):**
+| | `malloc`/`free` | `new`/`delete` |
+|---|---|---|
+| Constructor/Destructor calls | No — just raw memory allocation | **Yes** — `new` calls the constructor after allocating, `delete` calls the destructor before deallocating |
+| Type safety | Returns `void*`, needs explicit cast in C++ | Returns a properly-typed pointer directly |
+| Failure behavior | Returns `NULL` on failure | Throws `std::bad_alloc` exception on failure (by default) |
+| Overloadable | No | Yes — can be overloaded per-class for custom allocation strategies |
+
+---
+
+## 8. Structs vs Classes (C++)
+
+In C++, `struct` and `class` are **nearly identical** — the only functional difference is the **default access specifier**:
+- `struct` members are **public** by default.
+- `class` members are **private** by default.
+
+```cpp
+struct Point { int x, y; };       // x, y are public by default
+class Point2 { int x, y; };       // x, y are PRIVATE by default — inaccessible from outside without accessors
+```
+(Default *inheritance* access also differs: `struct` inheritance defaults to `public`, `class` inheritance defaults to `private` — a more obscure but occasionally-asked detail.)
+
+**Convention (worth mentioning even though it's not enforced by the compiler):** `struct` is conventionally used for simple, passive data-holding types (POD — "Plain Old Data" — with little/no behavior, all-public fields); `class` is conventionally used for types with encapsulated state, invariants, and behavior — this mirrors the Encapsulation discussion from the OOP guide (Section 2 there).
+
+**Note — C vs C++ structs (worth knowing if asked):** In plain C, a `struct` can only contain data members (no member functions, no access control, no constructors/inheritance) — C++ significantly extends `struct` to support everything a `class` can, differing only in the default access specifier as noted above.
+
+---
+
+## 9. Constructors & Destructors
+
+**Constructor**: A special member function automatically called when an object is created, typically used to initialize the object's state.
+**Destructor**: A special member function automatically called when an object's lifetime ends (goes out of scope, or is explicitly `delete`d), typically used to release resources the object owns.
+
+```cpp
+class Resource {
+    int *data;
+public:
+    Resource(int size) {            // constructor
+        data = new int[size];
+        std::cout << "Acquired\n";
+    }
+    ~Resource() {                   // destructor (note the ~)
+        delete[] data;
+        std::cout << "Released\n";
+    }
+};
+```
+
+**Constructor types (commonly asked to name and distinguish):**
+- **Default constructor**: takes no arguments (either explicitly written, or compiler-generated if no constructor is defined at all).
+- **Parameterized constructor**: takes arguments to initialize members with specific values.
+- **Copy constructor**: `Resource(const Resource &other)` — constructs a new object as a copy of an existing one (called on pass-by-value, return-by-value in some cases, and explicit copy-initialization).
+- **Move constructor** (C++11+): `Resource(Resource &&other)` — "steals" resources from a temporary/rvalue object instead of copying, for efficiency (Section 11).
+
+**RAII (Resource Acquisition Is Initialization) — a foundational C++ idiom, extremely commonly asked:** Tie a resource's lifetime (memory, file handles, network sockets, locks) directly to an object's lifetime — acquire the resource in the constructor, release it in the destructor. Since C++ **guarantees** destructors run automatically when an object goes out of scope (including during **stack unwinding** from an exception), RAII ensures resources are always properly released, even if an exception is thrown mid-function, without needing manual `try/finally`-style cleanup blocks. This is the underlying mechanism behind smart pointers (Section 12), `std::lock_guard` (mutex RAII, ties to the OS guide's mutex section), and `std::fstream` (automatically closes files on destruction).
+
+**Destructor and `virtual` (extremely commonly asked — a classic C++ interview trap):** If a class is intended to be used **polymorphically** (i.e., deleted through a base-class pointer) and has any virtual functions, its destructor **must** also be declared `virtual` — otherwise, deleting a derived object through a base-class pointer only calls the **base class's** destructor, leaking any resources the derived class allocated (undefined behavior, per the C++ standard).
+```cpp
+class Base {
+public:
+    virtual ~Base() {}  // MUST be virtual if Derived will be deleted via a Base*
+};
+class Derived : public Base {
+    int *data;
+public:
+    Derived() { data = new int[100]; }
+    ~Derived() { delete[] data; }
+};
+Base *b = new Derived();
+delete b; // WITHOUT virtual ~Base(), this only calls ~Base(), leaking Derived's `data` array
+```
+
+---
+
+## 10. The Rule of Three/Five/Zero
+
+Governs which special member functions a class should define together, to avoid subtle bugs (especially around resource ownership).
+
+**Rule of Three (classic C++03 rule):** If a class defines **any one** of the following, it should almost always explicitly define **all three**:
+1. Destructor
+2. Copy constructor
+3. Copy assignment operator (`operator=`)
+
+**Why:** If a class manages a resource (e.g., holds a raw pointer to heap memory) and you only define a destructor (to free it) without also defining the copy constructor/assignment operator, the **compiler-generated defaults** for those will perform a shallow copy (just copying the pointer value, not the pointed-to data) — leading to **double-free bugs** (two objects' destructors both try to free the same memory) or **dangling pointers** once one of the copies is destroyed.
+
+**Rule of Five (C++11+, extends the Rule of Three):** Also consider defining:
+4. Move constructor
+5. Move assignment operator
+
+...for performance (avoiding unnecessary deep copies when a temporary/rvalue object could simply have its resources "stolen" instead — Section 11).
+
+**Rule of Zero (modern best practice, very commonly cited as the preferred approach today):** Design classes to **not** manage raw resources directly at all — instead, delegate resource ownership to existing RAII-wrapper types (`std::vector`, `std::string`, `std::unique_ptr`, `std::shared_ptr`), which already correctly implement the Rule of Five internally. If a class does this, it needs **none** of the five special member functions defined explicitly — the compiler-generated defaults (which correctly copy/move each member, delegating to those members' own correct behavior) just work. **This is the modern, strongly preferred approach** — manually managing raw `new`/`delete` in application-level code is now considered a code smell in idiomatic modern C++.
+
+---
+
+## 11. Copy vs Move Semantics
+
+**Copy semantics**: creates an independent duplicate of an object's data (potentially expensive for objects owning large heap-allocated resources — every byte must be copied).
+
+**Move semantics (C++11+)**: "steals" the internal resources (e.g., a heap pointer) from a source object (typically a temporary/rvalue that's about to be destroyed anyway) instead of copying them, leaving the source in a valid-but-unspecified (typically empty/null) state — much cheaper, since it's just a pointer/handle transfer, not a deep data copy.
+
+```cpp
+class Buffer {
+    int *data; size_t size;
+public:
+    // Move constructor
+    Buffer(Buffer &&other) noexcept : data(other.data), size(other.size) {
+        other.data = nullptr;  // leave the source in a safe, empty state
+        other.size = 0;
+    }
+    // Copy constructor (for comparison)
+    Buffer(const Buffer &other) : size(other.size) {
+        data = new int[size];
+        std::copy(other.data, other.data + size, data); // actual deep copy — expensive
+    }
+};
+```
+
+**`std::move`:** Doesn't actually move anything itself — it's just a **cast** that converts an lvalue into an rvalue reference, signaling to the compiler "this object's resources can safely be stolen/moved from, since I don't need its current value anymore" — enabling the move constructor/assignment overload to be selected instead of the copy version.
+```cpp
+Buffer b1(1000);
+Buffer b2 = std::move(b1); // invokes the move constructor — b1 is now empty/moved-from, b2 owns the data
+```
+
+**lvalue vs rvalue (commonly asked to distinguish, the theoretical basis for all of this):** An **lvalue** has a persistent identity/address you can take (`&x` is valid) — typically a named variable. An **rvalue** is a temporary value with no persistent identity (e.g., the result of `a + b`, or a literal) — about to be discarded, making it safe to "steal" resources from without anyone noticing. Move semantics specifically target rvalues (via `&&`, "rvalue reference" parameter types) since only they're guaranteed safe to plunder.
+
+**Why this matters practically:** Returning large objects (e.g., a `std::vector` with a million elements) by value used to be considered expensive/discouraged pre-C++11 (favoring output parameters instead) — with move semantics (and compiler-side **Return Value Optimization/RVO**, which can elide the copy/move entirely in many cases), returning large objects by value is now both idiomatic and efficient in modern C++.
+
+---
+
+## 12. Smart Pointers
+
+RAII wrapper types (Section 9) that automatically manage the lifetime of a dynamically allocated object, eliminating manual `delete` calls and the memory-leak/double-free risks that come with them — the modern, strongly preferred alternative to raw owning pointers in C++.
+
+### `std::unique_ptr`
+Represents **exclusive ownership** — only one `unique_ptr` can own a given object at a time. Cannot be copied (copy constructor/assignment are deleted), only **moved**.
+```cpp
+std::unique_ptr<Resource> ptr1 = std::make_unique<Resource>(100);
+// std::unique_ptr<Resource> ptr2 = ptr1; // COMPILE ERROR — cannot copy
+std::unique_ptr<Resource> ptr2 = std::move(ptr1); // OK — ownership transferred, ptr1 is now null
+```
+Zero runtime overhead compared to a raw pointer (no reference counting) — should be the **default choice** whenever exclusive ownership is sufficient (which is most of the time).
+
+### `std::shared_ptr`
+Represents **shared ownership** via **reference counting** — multiple `shared_ptr`s can own the same object; the object is destroyed only when the **last** owning `shared_ptr` is destroyed (the count reaches zero).
+```cpp
+std::shared_ptr<Resource> p1 = std::make_shared<Resource>(100);
+std::shared_ptr<Resource> p2 = p1; // both now share ownership; reference count = 2
+// object destroyed automatically when both p1 and p2 go out of scope (count reaches 0)
+```
+Has real runtime overhead vs `unique_ptr` (atomic reference-count increments/decrements for thread safety, plus a separate control-block allocation) — use only when shared ownership is genuinely needed, not as a default/blanket choice.
+
+### `std::weak_ptr`
+A **non-owning** reference to an object managed by a `shared_ptr`, which does **not** contribute to the reference count — used specifically to break **reference cycles** (e.g., two objects holding `shared_ptr`s to each other would otherwise never reach a reference count of zero, causing a memory leak despite using "smart" pointers). Must be explicitly "locked" (`.lock()`) to obtain a temporary `shared_ptr` before accessing the object, safely handling the case where the object may have already been destroyed.
+
+**Interview trap:** *"Can smart pointers still leak memory?"* Yes — most commonly via **reference cycles** with `shared_ptr` (Object A holds a `shared_ptr` to B, B holds a `shared_ptr` back to A — neither's count ever reaches zero) — the fix is to make one side of such a cycle a `weak_ptr` instead.
+
+**`make_unique`/`make_shared` vs raw `new` (commonly asked why these are preferred):** Exception-safety (avoids a subtle leak if an exception is thrown between the `new` call and the smart pointer's constructor in more complex expressions), and for `make_shared` specifically, a **single combined heap allocation** for both the object and its control block (vs two separate allocations when manually constructing a `shared_ptr` from a raw `new`-ed pointer) — a meaningful performance win.
+
+---
+
+## 13. Virtual Functions & Polymorphism
+
+*(Runtime polymorphism concepts covered generally in the OOP guide, Section 5 — here focused on C++'s specific mechanics.)*
+
+```cpp
+class Shape {
+public:
+    virtual double area() const { return 0; }  // virtual — enables runtime dispatch
+    virtual ~Shape() = default;
+};
+class Circle : public Shape {
+    double radius;
+public:
+    Circle(double r) : radius(r) {}
+    double area() const override { return 3.14159 * radius * radius; } // override keyword: compiler checks it actually overrides a virtual base method
+};
+
+Shape *s = new Circle(5);
+s->area(); // calls Circle::area() at RUNTIME, via the vtable — not Shape::area()
+```
+
+**How it works — the vtable (commonly asked to explain the mechanism, ties to the OOP guide's polymorphism section):** Each class with virtual functions has a compiler-generated **virtual table (vtable)** — an array of function pointers to the actual (most-derived) implementations. Every object of such a class carries a hidden pointer (**vptr**) to its class's vtable. A virtual function call is resolved by looking up the function pointer in the vtable **at runtime**, rather than being hardcoded at compile time (as a normal, non-virtual function call would be) — this indirection is what enables a `Shape*` to correctly call `Circle::area()` even though the compile-time static type is `Shape`.
+
+**Pure virtual functions & abstract classes:**
+```cpp
+class Shape {
+public:
+    virtual double area() const = 0; // pure virtual — no implementation, "= 0"
+};
+// Shape s; // COMPILE ERROR — cannot instantiate a class with any pure virtual function (it's abstract)
+```
+A class with at least one pure virtual function is **abstract** (cannot be instantiated directly) — directly analogous to abstract classes in the OOP guide (Section 9 there), and the closest C++ equivalent to an "interface" (a class consisting **entirely** of pure virtual functions, with no data members, approximates the interface concept from other languages).
+
+**`override` and `final` keywords (C++11+, commonly asked):** `override` is optional syntactically but strongly recommended — it tells the compiler "I intend this to override a base virtual function," causing a **compile error** if it doesn't actually match a base class virtual function's signature (catching typos/signature mismatches that would otherwise silently create an unrelated new function instead of overriding, a notoriously easy-to-miss bug without this keyword). `final` prevents further overriding in derived classes (on a method) or further inheritance entirely (on a class).
+
+**Virtual function call cost (commonly asked):** Slightly slower than a normal function call due to the vtable indirection (an extra memory lookup) and generally prevents the compiler from **inlining** the call (since the actual target isn't known until runtime) — a real but usually negligible performance cost, worth mentioning if asked about performance-critical/embedded contexts where it might matter.
+
+---
+
+## 14. Function Overloading, Overriding, Templates
+
+**Overloading** (compile-time, ties to the OOP guide's Section 5a): multiple functions with the same name but different parameter lists, resolved at compile time based on argument types.
+```cpp
+void print(int x) { std::cout << "int: " << x; }
+void print(double x) { std::cout << "double: " << x; }
+```
+
+**Overriding** (runtime, requires `virtual`, covered above): a derived class provides its own implementation of a base class's virtual function, resolved at runtime based on the actual object type.
+
+**Templates (C++'s parametric polymorphism / generics, ties to the OOP guide's Section 5c):** Write code that works with any type, with the actual type substituted at **compile time**.
+```cpp
+template <typename T>
+T maxVal(T a, T b) {
+    return (a > b) ? a : b;
+}
+maxVal(3, 7);        // T deduced as int
+maxVal(2.5, 1.1);    // T deduced as double
+```
+
+**Templates vs Generics (Java) — a subtlety worth knowing if asked about cross-language comparison:** C++ templates use **compile-time monomorphization** — the compiler generates a **separate concrete version** of the function/class for each distinct type actually used (e.g., a distinct `maxVal<int>` and `maxVal<double>` are each compiled independently) — this means zero runtime overhead (no boxing, no runtime type checks) but can increase compiled binary size ("code bloat") if a template is instantiated with many different types. This contrasts with Java generics, which use **type erasure** (generic type information is mostly discarded after compile-time checks, and a single compiled version handles all reference types via casting) — a fundamentally different implementation strategy with different trade-offs.
+
+**Templates vs `void*`/base-class polymorphism for generic code (worth articulating):** Templates provide **compile-time** type safety (errors caught at compile time, no runtime casting needed, and no virtual-call overhead) at the cost of longer compile times and potential code bloat; runtime polymorphism (via a common base class/interface) provides more flexibility (can handle types not known until runtime, single compiled implementation) at the cost of the vtable indirection overhead and requiring an actual inheritance relationship.
+
+---
+
+## 15. `static` Keyword
+
+`static` has **different meanings depending on context** — a very commonly asked "explain all the uses of `static`" question.
+
+**1. Static local variable:** Retains its value **between function calls** (initialized only once, on first call), instead of being recreated/reset every call like a normal local variable.
+```cpp
+void counter() {
+    static int count = 0; // initialized only ONCE, across all calls
+    count++;
+    std::cout << count; // prints 1, 2, 3, ... on successive calls
+}
+```
+
+**2. Static global variable / static function (file scope):** Restricts the symbol's **linkage** to the current translation unit (source file) — it becomes invisible to other `.cpp` files during linking, even if they try to reference it via `extern`. Used to avoid naming collisions across files, and to signal "this is a private implementation detail of this file" (ties to Section 17).
+
+**3. Static class member (C++):** A member variable **shared across all instances** of the class (only one copy exists, not per-object) — must be defined (and often initialized) once outside the class in a `.cpp` file (pre-C++17), or can be initialized inline as `inline static` (C++17+).
+```cpp
+class Counter {
+public:
+    static int instanceCount; // declaration
+    Counter() { instanceCount++; }
+};
+int Counter::instanceCount = 0; // definition (pre-C++17 requirement)
+```
+
+**4. Static member function:** A function that belongs to the class itself, not to any particular instance — can be called without an object (`ClassName::staticMethod()`), and cannot access non-static members (since it has no implicit `this` pointer) — the mechanism underlying the classic Singleton pattern's `getInstance()` from the Design Patterns guide.
+
+---
+
+## 16. `inline` Functions & Macros
+
+**Macros (`#define`, preprocessor-based):** Simple **textual substitution** performed by the preprocessor, before actual compilation even begins — no type checking, no scoping rules, purely mechanical text replacement.
+```c
+#define SQUARE(x) ((x) * (x))
+int y = SQUARE(3 + 2); // expands to ((3 + 2) * (3 + 2)) = 25 — correct BECAUSE of the parentheses
+```
+**Classic macro pitfall (extremely commonly tested):** Forgetting parentheses around macro parameters causes operator-precedence bugs:
+```c
+#define SQUARE(x) (x * x)
+int y = SQUARE(3 + 2); // expands to (3 + 2 * 3 + 2) = 11, NOT 25! — always parenthesize macro params AND the whole expression
+```
+
+**Inline functions (C++, a safer alternative to macros):** A hint to the compiler suggesting it substitute the function's body directly at each call site (avoiding function-call overhead — stack frame setup, jump, return), while still being **type-checked, scoped, and debuggable** like a normal function (unlike macros).
+```cpp
+inline int square(int x) { return x * x; } // type-safe, no precedence gotchas
+```
+
+**`inline` vs macro (very commonly asked to compare, given both aim at similar goals):**
+| | Macro | `inline` function |
+|---|---|---|
+| Type checking | None (pure text substitution) | Full type checking, like a normal function |
+| Scoping | None (global text replacement, ignores C++ scope rules) | Respects normal scoping rules |
+| Debugging | Hard (debugger sees the expanded text, not a named function) | Easy (behaves like a normal function in a debugger) |
+| Operator precedence bugs | Common, as shown above | None — arguments are evaluated normally, not textually substituted |
+| Actually always inlined? | N/A (not a function call at all — pure substitution) | **Not guaranteed** — `inline` is only a *hint*; the compiler may choose not to inline it (e.g., if the function is too large/complex), while still legally allowing multiple identical definitions across translation units (its main *guaranteed* effect, relaxing the One Definition Rule) |
+
+**Interview trap:** *"Does `inline` guarantee the function will actually be inlined?"* No — modern compilers make their own cost-based decision about whether inlining is actually beneficial (a large `inline` function might not be inlined at all; conversely, compilers may also inline non-`inline`-marked functions automatically if beneficial, especially with optimization flags enabled). The keyword's only *guaranteed* language-level effect is permitting the function to be defined identically in multiple translation units without violating the One Definition Rule (necessary for functions defined in headers included by multiple `.cpp` files).
+
+---
+
+## 17. Storage Classes & Linkage
+
+**Storage classes (C/C++) control a variable's lifetime, scope, and linkage:**
+- **`auto`** (C/C++, not to be confused with C++11's *type-deduction* `auto`): the default storage class for local variables — automatic storage duration (created on function entry, destroyed on exit). Rarely written explicitly, since it's the default.
+- **`register`**: a (largely obsolete, ignored/deprecated in modern C++) hint suggesting the compiler keep a variable in a CPU register for faster access — modern compilers' register allocation optimizations make this hint essentially irrelevant today.
+- **`static`**: covered in depth in Section 15.
+- **`extern`**: declares that a variable/function is **defined elsewhere** (in a different translation unit) — used to share a global variable/function across multiple `.cpp` files, in contrast to `static`'s file-restricting effect.
+
+**Linkage (commonly asked to define, especially in the context of `static` vs `extern`):**
+- **External linkage**: a symbol is visible/accessible across multiple translation units (the default for global functions and non-`const` global variables).
+- **Internal linkage**: a symbol is restricted to the translation unit it's defined in (`static` globals/functions, and `const` globals by default in C++).
+- **No linkage**: local variables (each function call gets its own independent instance conceptually, not shared/referenceable from elsewhere at all).
+
+```c
+// file1.c
+int sharedValue = 42;         // external linkage (default) — accessible from other files via extern
+static int privateValue = 10; // internal linkage — invisible outside this file
+
+// file2.c
+extern int sharedValue;  // declares "this is defined elsewhere" — links correctly to file1.c's sharedValue
+// extern int privateValue; // would compile but FAIL TO LINK — privateValue has internal linkage
+```
+
+---
+
+## 18. Structure Padding & Alignment
+
+The compiler may insert unused **padding bytes** between struct members (or after the last member) to satisfy the target architecture's **alignment requirements** (e.g., a 4-byte `int` typically must start at an address that's a multiple of 4) — a commonly asked "why is `sizeof` bigger than you'd naively expect" question.
+
+```cpp
+struct Example {
+    char a;   // 1 byte
+    int b;    // 4 bytes
+    char c;   // 1 byte
+};
+// sizeof(Example) is often 12, NOT 6 (1+4+1)!
+// Layout: [a][3 bytes padding][b b b b][c][3 bytes padding]
+// Padding after 'a' aligns 'b' to a 4-byte boundary; padding after 'c' aligns the WHOLE STRUCT's size
+// to a multiple of its largest member's alignment (4), so arrays of this struct stay properly aligned too
+```
+
+**Why alignment matters (commonly asked to justify, not just describe):** Many CPU architectures either **cannot** access misaligned data at all (triggering a hardware fault) or can only do so at a significant **performance penalty** (requiring multiple memory accesses combined in software instead of a single aligned hardware read) — so compilers insert padding to guarantee every member starts at a properly aligned address for its type.
+
+**Practical implication — struct member ordering affects size (a genuinely useful, commonly-asked-about optimization technique):** Reordering struct members from largest to smallest alignment requirement can **reduce total padding**, shrinking the struct's overall size (relevant for memory-constrained systems, or arrays of many struct instances where the savings multiply).
+```cpp
+struct Bad  { char a; int b; char c; };  // often 12 bytes (as shown above)
+struct Good { int b; char a; char c; };  // often 8 bytes — grouping same-alignment members together minimizes padding
+```
+
+**`#pragma pack` / `alignas`:** Compiler-specific pragmas (`#pragma pack(1)`) or the standard `alignas` specifier can force tighter (or specific) packing/alignment, trading the performance/correctness benefits of natural alignment for reduced memory usage or a specific required binary layout (e.g., matching a network protocol's or file format's exact byte layout) — worth mentioning as the tool for when this trade-off is intentional.
+
+---
+
+## 19. Undefined Behavior — Common Traps
+
+C/C++ have many operations whose behavior the language standard explicitly leaves **undefined** — the compiler is permitted to do *anything* (including something that appears to "work" on one compiler/platform but crashes or misbehaves on another, or after a compiler upgrade/optimization level change) — a favorite category of "spot the bug" interview questions.
+
+**Commonly tested undefined behaviors:**
+- **Dereferencing a null or dangling pointer** (Section 3).
+- **Signed integer overflow**: `INT_MAX + 1` is undefined behavior in C/C++ (unlike unsigned integer overflow, which is well-defined to wrap around via modular arithmetic) — a very commonly missed distinction.
+- **Using an uninitialized variable**: reading a local variable's value before it's ever been assigned.
+- **Buffer overread/overwrite**: accessing an array index outside its valid bounds (`arr[10]` on a 10-element array, valid indices 0-9) — C/C++ perform **no automatic bounds checking**, unlike many higher-level languages; this is the root cause of classic buffer-overflow security vulnerabilities.
+- **Modifying a variable twice without an intervening sequence point** (a more obscure but occasionally cited example): `i = i++ + 1;` — the order of the increment and assignment relative to each other is unspecified/undefined, and different compilers can legitimately produce different results.
+- **Returning a pointer/reference to a local (stack) variable**: the variable's storage is reclaimed the instant the function returns — the returned pointer/reference immediately dangles.
+```cpp
+int* dangerous() {
+    int local = 42;
+    return &local; // BUG — returns address of a variable that no longer exists after this function returns
+}
+```
+- **Data races** (in multithreaded code): two threads accessing the same memory location concurrently, with at least one being a write, without proper synchronization (Section 21 / the OS guide's Synchronization section) — technically undefined behavior per the C++ standard, not merely "may produce a wrong value."
+
+**Interview trap:** *"If undefined-behavior code happens to produce the 'right' output when you run it, is the bug actually fixed?"* No — undefined behavior means the standard makes **no guarantees whatsoever** about the outcome; it might work by coincidence today, on this compiler, with these optimization settings, and then break unpredictably after a seemingly unrelated code change, compiler upgrade, or even just a different build configuration. This is exactly why UB is considered so dangerous, and why tools like sanitizers (AddressSanitizer, UndefinedBehaviorSanitizer) are valuable for catching these bugs during testing rather than relying on them "happening to work."
+
+---
+
+## 20. STL Essentials
+
+The C++ **Standard Template Library** provides generic, well-optimized containers, algorithms, and iterators — expected baseline knowledge for any C++ interview.
+
+**Common containers (commonly asked to know complexities and when to use each — maps directly onto the Data Structures section of the DSA guide):**
+
+| Container | Underlying Structure | Access | Insert/Delete (typical) |
+|---|---|---|---|
+| `std::vector` | Dynamic array | O(1) random access | O(1) amortized at end, O(n) elsewhere |
+| `std::deque` | Segmented array (chunks) | O(1) random access | O(1) at both ends, O(n) in middle |
+| `std::list` | Doubly linked list | O(n) | O(1) given an iterator/position |
+| `std::set` / `std::map` | Red-Black Tree (balanced BST) | O(log n) | O(log n) |
+| `std::unordered_set` / `std::unordered_map` | Hash table | O(1) average | O(1) average |
+| `std::stack` | Adapter (default: `std::deque`) | O(1) top only | O(1) push/pop |
+| `std::queue` | Adapter (default: `std::deque`) | O(1) front/back only | O(1) push/pop |
+| `std::priority_queue` | Adapter (default: `std::vector`, heap ops) | O(1) top | O(log n) push/pop |
+
+**`vector` vs `list` (classic comparison, mirrors the Arrays vs Linked Lists comparison in the DSA guide):** `vector` offers O(1) random access and better cache locality (contiguous memory) — the default choice in most cases; `list` offers O(1) insertion/deletion **given an existing iterator to the position** (no shifting required), at the cost of O(n) access and poor cache locality (scattered nodes) — appropriate specifically when frequent mid-sequence insertion/deletion (with an already-known position) dominates the workload.
+
+**`map` vs `unordered_map` (very commonly asked to compare):** `map` maintains **sorted key order** (in-order traversal gives sorted output) with O(log n) operations (backed by a balanced BST); `unordered_map` offers average O(1) operations (backed by a hash table) but **no ordering guarantee** — choose `map` when sorted iteration or ordered range queries matter, `unordered_map` when raw lookup speed matters more and order is irrelevant.
+
+**Iterators:** A generalized "pointer-like" abstraction for traversing any container uniformly (ties directly to the Iterator pattern in the Design Patterns guide — the STL is essentially a large-scale real-world application of that exact pattern).
+```cpp
+std::vector<int> v = {1, 2, 3};
+for (auto it = v.begin(); it != v.end(); ++it) {
+    std::cout << *it << " ";  // dereference the iterator, just like a pointer
+}
+// Modern range-based for loop (syntactic sugar over the above):
+for (int x : v) { std::cout << x << " "; }
+```
+
+**Iterator invalidation (a commonly tested, subtle bug source):** Modifying a container (especially resizing a `vector`, which may reallocate its entire backing array) can **invalidate** previously obtained iterators/pointers/references into it — continuing to use an invalidated iterator is undefined behavior. Different containers have different invalidation rules (e.g., `std::list` insertions/deletions don't invalidate other iterators, since nodes aren't moved in memory — a notable advantage over `vector` in scenarios needing iterator stability across mutations).
+
+**Common algorithms (`<algorithm>` header, worth knowing exist and their complexity):** `std::sort` (O(n log n), typically introsort — a hybrid of quicksort/heapsort/insertion sort), `std::find` (O(n) linear scan), `std::binary_search` (O(log n), requires a pre-sorted range), `std::accumulate`, `std::count`, `std::unique`, `std::reverse` — knowing these exist (rather than hand-rolling equivalents) is itself a commonly evaluated signal of STL familiarity.
+
+---
+
+## 21. Multithreading Basics (C++)
+
+*(Concepts here mirror the OS guide's Synchronization/Mutex/Semaphore sections — this covers C++'s specific standard-library mechanisms, `std::thread` onward, C++11+.)*
+
+```cpp
+#include <thread>
+#include <mutex>
+
+std::mutex mtx;
+int counter = 0;
+
+void increment() {
+    std::lock_guard<std::mutex> lock(mtx); // RAII — automatically unlocks when 'lock' goes out of scope
+    counter++;
+}
+
+int main() {
+    std::thread t1(increment);
+    std::thread t2(increment);
+    t1.join(); // wait for t1 to finish before continuing
+    t2.join();
+}
+```
+
+**`std::mutex` + `std::lock_guard`/`std::unique_lock` (RAII locking, ties directly to Section 9's RAII discussion):** `std::lock_guard` provides basic RAII locking (locks on construction, unlocks on destruction, cannot be manually unlocked early); `std::unique_lock` is more flexible (can be manually locked/unlocked, deferred, or transferred), at a small additional overhead cost — prefer `lock_guard` unless the extra flexibility is specifically needed.
+
+**`std::atomic`:** Provides lock-free, guaranteed-atomic operations on simple types (integers, pointers, booleans) — for simple counters/flags, often preferable to a full mutex, since atomic operations avoid the overhead of OS-level locking/blocking (though they're not a universal substitute for mutexes protecting more complex, multi-step critical sections).
+```cpp
+std::atomic<int> counter(0);
+counter++; // atomic increment — safe without an explicit mutex
+```
+
+**`std::condition_variable`:** Used for signaling between threads (ties to the OS guide's semaphore-based signaling discussion) — a thread can `wait()` on a condition variable (releasing an associated lock while waiting) until another thread `notify_one()`/`notify_all()`s it, typically used for the classic Producer-Consumer pattern.
+
+**`std::async`/`std::future`:** A higher-level abstraction for asynchronous computation — `std::async` runs a function (potentially on a separate thread) and immediately returns a `std::future`, which can later be queried (`.get()`) to retrieve the result once ready, blocking if it isn't yet — a cleaner alternative to manual thread creation + shared-variable result-passing for simple "fire off a computation, get the result later" use cases.
+
+---
+
+## 22. Rapid-Fire Interview Q&A
+
+**Q: What are the four stages of C/C++ compilation?**
+Preprocessing (macro expansion/includes), Compilation (source → assembly), Assembly (assembly → object code), Linking (resolve symbols across object files/libraries into a final executable).
+
+**Q: Where do local variables live vs dynamically allocated (`new`/`malloc`) data?**
+Local variables live on the stack (automatic lifetime, tied to scope); dynamically allocated data lives on the heap (manual lifetime, explicitly freed).
+
+**Q: What's the difference between a pointer and a reference in C++?**
+A pointer can be null, reassigned, and requires explicit dereferencing; a reference must be initialized to a valid object, cannot be reassigned to refer to something else, and is used transparently like the original variable.
+
+**Q: Why must a base class's destructor be `virtual` if the class will be used polymorphically?**
+Without it, deleting a derived object through a base-class pointer only invokes the base class's destructor, skipping the derived class's cleanup and leaking any resources it allocated.
+
+**Q: What's the Rule of Three/Five/Zero?**
+If you define any of destructor/copy-constructor/copy-assignment, define all three (Three); modern C++ also considers move-constructor/move-assignment (Five); best practice is to avoid managing raw resources directly at all, relying on existing RAII types so none of the five need to be written (Zero).
+
+**Q: `unique_ptr` vs `shared_ptr` — when would you use each?**
+`unique_ptr` for exclusive ownership (the default choice, zero overhead); `shared_ptr` only when genuinely shared ownership across multiple owners is needed (has reference-counting overhead) — with `weak_ptr` to break potential reference cycles between `shared_ptr`s.
+
+**Q: Why is signed integer overflow undefined behavior but unsigned overflow isn't?**
+Unsigned integer arithmetic is explicitly defined by the standard to wrap around via modular arithmetic (`UINT_MAX + 1 == 0`); signed overflow has no such defined wraparound guarantee, leaving the compiler free to assume it never happens (and to optimize accordingly) — meaning it can produce genuinely unpredictable results if it does occur.
+
+**Q: What causes structure padding, and how can you minimize it?**
+The compiler inserts padding bytes between/after struct members so each member starts at an address satisfying its type's alignment requirement. Minimize it by ordering members from largest to smallest alignment/size, grouping similarly-sized members together.
+
+**Q: `map` vs `unordered_map` — how do you choose?**
+`map` (balanced BST) when sorted iteration/ordered range queries are needed, O(log n) operations; `unordered_map` (hash table) when raw average O(1) lookup speed matters more and ordering is irrelevant.
+
+**Q: What's the practical difference between `malloc`/`free` and `new`/`delete`?**
+`new`/`delete` additionally call constructors/destructors (proper C++ object lifecycle), are type-safe (no explicit cast needed), and throw an exception rather than returning null on allocation failure by default; `malloc`/`free` perform only raw memory allocation with no object-lifecycle awareness.
+
+---
+
+## Suggested Study Approach
+1. Be able to draw the process memory layout (stack/heap/BSS/data/text) from memory and explain what lives where — an extremely common whiteboard opener.
+2. Practice explaining the Rule of Three/Five/Zero and the virtual-destructor gotcha with actual code — these are two of the most consistently asked C++-specific questions.
+3. Rehearse the pointer vs reference and `unique_ptr` vs `shared_ptr` comparisons until they're instant, precise answers.
+4. Pair this guide with the OOP guide (Section 1) for the language-agnostic OOP theory, and the OS guide's Synchronization sections for the threading material here — interviewers frequently connect C++-specific mechanics (RAII, smart pointers, `std::mutex`) back to the general concepts covered there.
+5. Practice spotting undefined behavior in short code snippets (dangling pointers, signed overflow, unguarded array access) — "find the bug" style questions are a common, efficient way interviewers probe C/C++ fundamentals.

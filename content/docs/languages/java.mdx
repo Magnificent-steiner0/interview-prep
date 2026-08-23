@@ -1,0 +1,577 @@
+---
+title: "Java"
+description: "Java-specific interview fundamentals: JVM internals, memory management/GC, the type system, collections, concurrency, and modern language features — building directly on the lan..."
+---
+Java-specific interview fundamentals: JVM internals, memory management/GC, the type system, collections, concurrency, and modern language features — building directly on the language-agnostic OOP guide.
+
+---
+
+## Table of Contents
+1. [JVM, JRE, JDK](#1-jvm-jre-jdk)
+2. [How Java Code Runs (Compilation to Execution)](#2-how-java-code-runs-compilation-to-execution)
+3. [Memory Model: Stack vs Heap](#3-memory-model-stack-vs-heap)
+4. [Garbage Collection](#4-garbage-collection)
+5. [`==` vs `.equals()` vs `hashCode()`](#5--vs-equals-vs-hashcode)
+6. [String Pool & String Immutability](#6-string-pool--string-immutability)
+7. [`String` vs `StringBuilder` vs `StringBuffer`](#7-string-vs-stringbuilder-vs-stringbuffer)
+8. [Primitive Types vs Wrapper Classes (Autoboxing)](#8-primitive-types-vs-wrapper-classes-autoboxing)
+9. [Access Modifiers](#9-access-modifiers)
+10. [`final`, `finally`, `finalize`](#10-final-finally-finalize)
+11. [Exception Handling](#11-exception-handling)
+12. [Collections Framework](#12-collections-framework)
+13. [Generics](#13-generics)
+14. [Interfaces vs Abstract Classes (Java Specifics)](#14-interfaces-vs-abstract-classes-java-specifics)
+15. [Multithreading & Concurrency](#15-multithreading--concurrency)
+16. [`synchronized`, Locks, and the `volatile` Keyword](#16-synchronized-locks-and-the-volatile-keyword)
+17. [Java Memory Model (JMM)](#17-java-memory-model-jmm)
+18. [Streams & Lambdas (Java 8+)](#18-streams--lambdas-java-8)
+19. [Object Class Methods](#19-object-class-methods)
+20. [Rapid-Fire Interview Q&A](#20-rapid-fire-interview-qa)
+
+---
+
+## 1. JVM, JRE, JDK
+
+**JVM (Java Virtual Machine)**: An abstract computing machine that executes Java **bytecode** — the runtime engine responsible for loading classes, verifying bytecode, executing it (via interpretation and/or JIT compilation), and managing memory (garbage collection). Platform-specific implementations exist for each OS/architecture, which is what makes compiled Java bytecode itself platform-independent ("write once, run anywhere").
+
+**JRE (Java Runtime Environment)**: The JVM **plus** the core class libraries (`java.lang`, `java.util`, etc.) needed to actually **run** compiled Java applications — no compiler included.
+
+**JDK (Java Development Kit)**: The JRE **plus** development tools — the compiler (`javac`), debugger, and other tooling needed to actually **develop** Java applications.
+
+**Relationship (commonly asked to draw as a diagram):**
+```
+JDK ⊃ JRE ⊃ JVM
+(JDK = JRE + dev tools; JRE = JVM + standard libraries)
+```
+
+---
+
+## 2. How Java Code Runs (Compilation to Execution)
+
+```
+.java source → javac (compiler) → .class (bytecode) → JVM class loader → Bytecode verifier → Execution (interpreter + JIT)
+```
+
+1. **Compilation**: `javac` compiles `.java` source into platform-independent **bytecode** (`.class` files) — not directly executable machine code, but an intermediate instruction set the JVM understands.
+2. **Class Loading**: The JVM's **ClassLoader** loads `.class` files into memory on demand (lazily, typically when a class is first referenced), following a **delegation hierarchy** (Bootstrap → Extension/Platform → Application/System class loaders — each delegates to its parent first, only loading itself if the parent can't find the class, preventing core classes from being accidentally overridden by user code).
+3. **Bytecode Verification**: The JVM verifies loaded bytecode is structurally valid and doesn't violate security/type-safety constraints before executing it (a key part of Java's security model, especially historically relevant for applets/untrusted code).
+4. **Execution**: The JVM executes bytecode via a combination of **interpretation** (executing bytecode instructions one at a time, slower but has no startup delay) and **JIT (Just-In-Time) compilation** (identifying "hot" frequently-executed code paths at runtime and compiling them directly to native machine code for that specific CPU, dramatically speeding up repeated execution) — this hybrid approach is why Java, despite being "interpreted," can approach native-code performance for long-running, hot-path-heavy applications.
+
+**Interview trap:** *"Is Java compiled or interpreted?"* **Both** — source is compiled to bytecode ahead of time (`javac`), and that bytecode is then interpreted **and/or** JIT-compiled to native code at runtime by the JVM — it doesn't fit cleanly into a pure "compiled" or "interpreted" bucket, which is exactly the nuance interviewers are checking for.
+
+---
+
+## 3. Memory Model: Stack vs Heap
+
+*(Builds directly on the general Memory Layout discussion in the C/C++ guide — Java's model is a managed variant of the same underlying concepts.)*
+
+- **Stack**: Stores **local variables** (primitives directly; object references, not the objects themselves) and method call frames — one stack **per thread**, automatically managed (LIFO), memory reclaimed the instant a method returns. Fast, but limited size (a `StackOverflowError` occurs on excessive/infinite recursion — a checked, catchable `Error` in Java, unlike C++'s undefined-behavior stack overflow).
+- **Heap**: Stores all **objects** (and arrays) — shared across all threads, managed by the **Garbage Collector** (Section 4) rather than manual allocation/deallocation. This is the fundamental difference from C/C++: Java programmers never explicitly `free`/`delete` heap memory.
+
+```java
+void method() {
+    int x = 5;                    // primitive — lives on the stack directly
+    Person p = new Person("Alice"); // 'p' (the reference) lives on the stack;
+                                     // the actual Person OBJECT lives on the heap
+}
+```
+
+**Interview trap:** *"Is Java pass-by-value or pass-by-reference?"* Java is **always pass-by-value** — but for object types, the *value being passed is the reference itself* (a copy of the reference/pointer, not the object). This means a method **can** mutate the referenced object's internal state (since both the original and copied reference point to the same heap object), but **cannot** reassign the caller's original reference variable to point to a different object entirely (since only a copy of the reference was passed, not the variable itself). This single distinction is one of the most consistently misunderstood/asked Java questions.
+```java
+void reassign(Person p) { p = new Person("Bob"); } // only changes the LOCAL copy of the reference
+void mutate(Person p) { p.setName("Bob"); }        // changes the actual shared object — visible to caller
+
+Person original = new Person("Alice");
+reassign(original); // original.getName() still "Alice" — reassignment didn't propagate
+mutate(original);    // original.getName() now "Bob" — mutation DID propagate
+```
+
+---
+
+## 4. Garbage Collection
+
+Java automatically reclaims heap memory occupied by objects that are no longer **reachable** from any live reference (a "GC root" — local variables on any thread's stack, static fields, JNI references) — eliminating manual `free`/`delete` and the memory-leak/dangling-pointer classes of bugs common in C/C++, at the cost of some runtime overhead and less precise control over exactly when memory is reclaimed.
+
+**Generational Garbage Collection (the core theoretical model most JVM GCs are built on, commonly asked to explain):** Based on the empirical observation that **most objects die young** (the "weak generational hypothesis") — the heap is divided into generations:
+- **Young Generation** (further split into **Eden** and two **Survivor** spaces): new objects are allocated here; garbage collected frequently via a fast **minor GC**, since most objects here are expected to become unreachable quickly. Objects that survive several minor GC cycles (still reachable after repeated collection) are **promoted** to the Old Generation.
+- **Old (Tenured) Generation**: holds longer-lived objects; collected less frequently via a slower, more expensive **major/full GC** (since it typically must scan a much larger heap region).
+
+**Common GC algorithms (worth naming, not necessarily deep internals, unless the role is JVM-performance-focused):**
+- **Serial GC**: single-threaded, stop-the-world — simplest, suitable for small applications/single-core environments.
+- **Parallel GC**: multiple threads for garbage collection, still stop-the-world, but faster wall-clock time by parallelizing the work — historically the default, throughput-oriented.
+- **G1 (Garbage-First) GC**: divides the heap into many small regions, prioritizes collecting regions with the most garbage first, aims to balance throughput with more predictable, bounded pause times — the default GC in modern Java versions (9+).
+- **ZGC / Shenandoah**: modern **low-latency** collectors designed for very large heaps with extremely short (sub-millisecond target) pause times, doing most collection work concurrently with the application threads rather than stopping them.
+
+**Stop-the-world pause:** A period during garbage collection where **all** application threads are paused so the GC can safely traverse/modify the heap without the risk of the application concurrently mutating object references mid-scan — minimizing the frequency/duration of these pauses is a central concern in GC algorithm design and JVM tuning, especially for latency-sensitive applications.
+
+**`finalize()` (deprecated, worth knowing why):** Historically, a method objects could override to run cleanup logic before GC reclaimed them — now **deprecated** (since Java 9) because it's unreliable (no guarantee it runs promptly, or at all, before JVM shutdown), can resurrect objects (making GC more complex/expensive), and can significantly delay collection. Modern Java favors **try-with-resources** (Section 11) and `java.lang.ref.Cleaner` for deterministic/safer cleanup instead.
+
+**Interview trap:** *"Does calling `System.gc()` force garbage collection?"* It's only a **hint/suggestion** to the JVM that now might be a good time to run GC — the JVM is free to ignore it entirely, and relying on it for correctness (e.g., assuming an object's `finalize()`/cleanup will run right after this call) is considered bad practice.
+
+---
+
+## 5. `==` vs `.equals()` vs `hashCode()`
+
+*(Ties directly to the OOP guide's rapid-fire Q&A on `==` vs `.equals()` — expanded here with Java-specific detail.)*
+
+**`==`**: For **primitives**, compares actual values. For **objects**, compares **reference identity** — whether both variables point to the exact same object in memory, regardless of whether the objects' contents are logically equal.
+
+**`.equals()`**: A method (inherited from `Object`, where it defaults to reference-identity comparison, same as `==`) that classes can **override** to define **logical/value equality** instead (e.g., `String.equals()` compares character content, not references).
+
+```java
+String s1 = new String("hello");
+String s2 = new String("hello");
+System.out.println(s1 == s2);       // false — different objects in memory
+System.out.println(s1.equals(s2));  // true — same content, since String overrides equals()
+```
+
+**The `equals()`/`hashCode()` contract (extremely commonly asked — a critical, frequently-violated rule):** If two objects are `.equals()`, they **must** return the same `.hashCode()`. (The converse isn't required — two unequal objects *can* share a hash code, called a **collision**, which hash-based collections handle internally, but equal objects with different hash codes will **break** any hash-based collection, since the object might be placed in the wrong bucket and become unfindable.)
+
+```java
+class Point {
+    int x, y;
+    Point(int x, int y) { this.x = x; this.y = y; }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof Point)) return false;
+        Point p = (Point) o;
+        return x == p.x && y == p.y;
+    }
+    @Override
+    public int hashCode() {
+        return Objects.hash(x, y); // MUST be consistent with equals()
+    }
+}
+```
+
+**Interview trap:** *"What breaks if you override `equals()` but forget `hashCode()`?"* Using such objects as keys in a `HashMap`/`HashSet` becomes broken — two "equal" objects (per your `equals()`) might hash to different buckets (using the default `Object.hashCode()`, based on memory address), so a lookup for a logically-equal-but-different-instance key will fail to find an entry that's actually "there" logically — a very commonly cited real-world bug source, and a strong signal in interviews to always override both together, never just one.
+
+---
+
+## 6. String Pool & String Immutability
+
+**Strings in Java are immutable** — once created, a `String` object's character content can never change; any apparent "modification" (concatenation, `replace()`, `substring()`, etc.) creates and returns a **new** `String` object.
+
+**Why Strings are immutable (commonly asked to justify, beyond "it's a design choice"):**
+- **Security**: strings are used extensively for sensitive data (file paths, network connections, class names in reflection) — immutability prevents a reference from being mutated after being validated/passed, which could otherwise be exploited.
+- **Thread-safety**: immutable objects are inherently safe to share across threads without synchronization (ties to the OOP guide's Immutability section).
+- **String Pool caching** (see below): only possible/safe *because* strings can never change after creation — caching a mutable object for reuse would be dangerous, since one holder's mutation would corrupt it for every other holder sharing that same cached instance.
+- **Safe as `HashMap` keys**: an object's hash code must remain stable while it's used as a key (Section 5) — a mutable string used as a key could have its hash change after insertion, breaking the hash map's internal invariants.
+
+**String Pool (String Interning):** The JVM maintains a special memory region (part of the heap, historically part of a separate "permgen"/metaspace area) where **string literals** are cached/reused — if you write the same literal string content multiple times, the JVM (by default, for literals) returns the **same** shared object rather than creating duplicates, saving memory.
+
+```java
+String s1 = "hello";           // literal — placed in / retrieved from the String Pool
+String s2 = "hello";           // same literal — JVM reuses the SAME pooled object
+System.out.println(s1 == s2);  // true — both reference the identical pooled object
+
+String s3 = new String("hello"); // explicit 'new' — FORCES a new object on the heap, bypassing the pool
+System.out.println(s1 == s3);    // false — different objects, even though content is identical
+
+String s4 = s3.intern();         // explicitly retrieves/adds to the pool
+System.out.println(s1 == s4);    // true
+```
+
+**Interview trap:** *"Why does `new String("hello") == "hello"` return `false`, while `"hello" == "hello"` returns `true`?"* Because `new String(...)` explicitly forces creation of a distinct heap object (bypassing the pool), while string literals are automatically interned/deduplicated by the JVM at compile/load time — a very commonly asked "explain this surprising output" question.
+
+---
+
+## 7. `String` vs `StringBuilder` vs `StringBuffer`
+
+*(Ties directly to the OOP guide's Arrays & Strings discussion on mutable string-building.)*
+
+**Why not just use `String` concatenation (`+=`) in a loop?** Since `String` is immutable, each `+=` in a loop creates an entirely **new** `String` object (copying all previous characters plus the new addition) — for `n` concatenations, this results in **O(n²)** total time/space, a classic Java performance pitfall.
+
+```java
+// BAD — O(n²)
+String result = "";
+for (int i = 0; i < n; i++) { result += i; }
+
+// GOOD — O(n), uses a mutable internal buffer
+StringBuilder sb = new StringBuilder();
+for (int i = 0; i < n; i++) { sb.append(i); }
+String result = sb.toString();
+```
+
+**`StringBuilder` vs `StringBuffer` (commonly asked to compare — the key distinguishing property):**
+| | `StringBuilder` | `StringBuffer` |
+|---|---|---|
+| Thread safety | **Not synchronized** — not thread-safe | **Synchronized** — thread-safe (every method is `synchronized`) |
+| Performance | Faster (no synchronization overhead) | Slower (synchronization overhead on every call) |
+| Introduced | Java 5 | Java 1.0 (legacy) |
+| When to use | Default choice — single-threaded string building (the vast majority of real-world use cases) | Only when the same builder instance is genuinely shared and mutated across multiple threads concurrently |
+
+**Interview trap:** *"Should you default to `StringBuffer` for 'safety'?"* No — `StringBuilder` is the **recommended default** in modern Java; `StringBuffer`'s synchronization is usually unnecessary overhead, since string-building is typically confined to a single thread/method's local scope, and `StringBuffer` is now considered mostly a legacy holdover.
+
+---
+
+## 8. Primitive Types vs Wrapper Classes (Autoboxing)
+
+Java has 8 **primitive types** (`int`, `long`, `double`, `float`, `boolean`, `char`, `byte`, `short`) which are **not objects** — stored directly (by value) rather than as heap-allocated references, for performance/memory efficiency. Each has a corresponding **wrapper class** (`Integer`, `Long`, `Double`, etc.) that wraps the primitive in an actual object, needed anywhere Java requires an object (e.g., generic type parameters — `List<int>` is illegal, `List<Integer>` is required, since generics work only with reference types).
+
+**Autoboxing/Unboxing (automatic conversion, Java 5+):**
+```java
+Integer boxed = 5;      // autoboxing: int → Integer (compiler inserts Integer.valueOf(5))
+int unboxed = boxed;    // unboxing: Integer → int (compiler inserts boxed.intValue())
+```
+
+**Integer caching pitfall (a classic, frequently-tested "explain this surprising output" question):** `Integer.valueOf()` caches/reuses `Integer` objects for values in the range **-128 to 127** (a JVM-mandated cache), but creates new objects outside that range — meaning `==` comparison on boxed `Integer`s can behave inconsistently depending on the value.
+```java
+Integer a = 100, b = 100;
+System.out.println(a == b);   // true — both within the cached range, same pooled object
+
+Integer c = 200, d = 200;
+System.out.println(c == d);   // false — outside the cache range, distinct objects!
+
+System.out.println(c.equals(d)); // true — always use .equals() for wrapper value comparison, never ==
+```
+
+**`NullPointerException` risk from unboxing:** Unboxing a `null` wrapper object throws an `NPE` — a common subtle bug when mixing primitives and wrappers (e.g., a `Map<String, Integer>` lookup returning `null` for a missing key, then being used in an arithmetic expression that implicitly unboxes it).
+```java
+Map<String, Integer> map = new HashMap<>();
+int value = map.get("missing"); // NullPointerException! get() returns null, implicit unboxing fails
+```
+
+---
+
+## 9. Access Modifiers
+
+| Modifier | Same Class | Same Package | Subclass (different package) | Different Package (non-subclass) |
+|---|---|---|---|---|
+| `private` | ✅ | ❌ | ❌ | ❌ |
+| (default/package-private) | ✅ | ✅ | ❌ | ❌ |
+| `protected` | ✅ | ✅ | ✅ | ❌ |
+| `public` | ✅ | ✅ | ✅ | ✅ |
+
+**Package-private (default, no keyword):** The access level when **no** modifier is specified — visible only within the same package, a level of granularity that doesn't exist by name in many other OOP languages, and a commonly asked "what's the default if I write nothing" question.
+
+**Interview trap:** *"Can a subclass in a different package access a `protected` member?"* Yes, but with a subtlety — it can access it **through inheritance** (e.g., `this.protectedField`, or via an instance of itself/a further subclass), but **not** through an arbitrary instance of the base class obtained some other way (e.g., a `protected` field accessed via a parameter of the base type, unrelated to the subclass's own inheritance chain) — a more advanced nuance sometimes probed in deeper interviews.
+
+---
+
+## 10. `final`, `finally`, `finalize`
+
+Three commonly confused, similarly-spelled keywords — a favorite "explain the difference" interview question.
+
+- **`final` (keyword, modifier)**: Applied to a **variable** — makes it a constant (cannot be reassigned after initialization; for object references, the reference itself is fixed, but the referenced object's internal state can still be mutated unless the object is *also* independently immutable — ties to the OOP guide's Immutability section). Applied to a **method** — prevents it from being overridden by subclasses. Applied to a **class** — prevents it from being subclassed at all (e.g., `String`, `Integer` are both `final` classes in the JDK).
+- **`finally` (keyword, exception handling)**: A block that **always executes** after a `try`/`catch`, regardless of whether an exception was thrown or a `return` statement was hit inside the `try`/`catch` — used for guaranteed cleanup (closing resources, releasing locks), directly analogous to RAII's guarantee in C++, though achieved here via explicit block syntax rather than automatic destructor invocation.
+- **`finalize()` (method, deprecated)**: Covered in Section 4 — a now-deprecated hook for pre-GC cleanup logic; superseded by try-with-resources and `Cleaner`.
+
+**`finally` execution edge case (commonly asked):** `finally` executes even if the `try`/`catch` block contains a `return` statement — the returned value is determined **before** `finally` runs, but if `finally` **itself** also contains a `return`, it silently **overrides** the original return value (and, notably, suppresses any exception that might have been propagating) — considered a serious code smell/anti-pattern, but a commonly tested "what does this print" trivia question.
+```java
+static int test() {
+    try {
+        return 1;
+    } finally {
+        return 2; // this OVERRIDES the try block's return — method returns 2, not 1
+    }
+}
+```
+
+---
+
+## 11. Exception Handling
+
+*(Builds on the OOP guide's general Exception Handling section — Java-specific hierarchy and mechanics here.)*
+
+**Java's exception hierarchy (commonly asked to draw):**
+```
+Throwable
+├── Error (serious, typically unrecoverable JVM-level problems — e.g., OutOfMemoryError, StackOverflowError)
+└── Exception
+    ├── Checked Exceptions (must be declared/caught — e.g., IOException, SQLException)
+    └── RuntimeException (Unchecked — e.g., NullPointerException, ArrayIndexOutOfBoundsException, IllegalArgumentException)
+```
+
+**Checked vs Unchecked (very commonly asked, ties to the OOP guide's checked/unchecked table):** Checked exceptions **must** either be caught or declared via `throws` in the method signature (enforced by the compiler) — representing conditions a well-written program should anticipate and recover from (e.g., a file not being found). Unchecked exceptions (`RuntimeException` and its subclasses, plus `Error`) require **no** such compiler enforcement — typically representing programming bugs or unrecoverable conditions.
+
+**Try-with-resources (Java 7+, the modern preferred pattern for resource cleanup):** Any class implementing `AutoCloseable` (`.close()`) can be used in a try-with-resources statement, guaranteeing `.close()` is called automatically at the end of the block — **even if an exception is thrown** — eliminating the need for manual `finally` blocks for resource cleanup.
+```java
+try (FileReader reader = new FileReader("file.txt");
+     BufferedReader br = new BufferedReader(reader)) {
+    // use reader/br
+} // both automatically .close()'d here, in reverse order of declaration, even on exception
+catch (IOException e) {
+    // handle
+}
+```
+
+**Custom exceptions (ties to the OOP guide's best-practices section):**
+```java
+class InsufficientFundsException extends RuntimeException {
+    public InsufficientFundsException(String message) { super(message); }
+}
+```
+
+**Multi-catch (Java 7+):** `catch (IOException | SQLException e) { ... }` — handle multiple unrelated exception types with shared handling logic in a single block, avoiding duplicated catch-block code.
+
+**Interview trap:** *"Why is overusing checked exceptions considered bad practice by some in modern Java?"* Checked exceptions can lead to noisy, boilerplate-heavy code (forcing every caller up the chain to either catch or re-declare them) and don't compose well with newer functional-style APIs like Streams/lambdas (Section 18), which generally can't cleanly propagate checked exceptions through their functional interfaces — this is a commonly cited, nuanced, slightly opinionated discussion point in more senior-level interviews.
+
+---
+
+## 12. Collections Framework
+
+*(Maps directly onto the general Data Structures covered in the DSA guide — here with Java's specific interface/implementation hierarchy.)*
+
+**Core interfaces and common implementations:**
+```
+Collection
+├── List (ordered, allows duplicates)
+│   ├── ArrayList — dynamic array, O(1) access, O(n) insert/delete in middle
+│   └── LinkedList — doubly linked list, O(1) insert/delete at ends, O(n) access
+├── Set (no duplicates)
+│   ├── HashSet — backed by a HashMap, O(1) average operations, no ordering
+│   ├── LinkedHashSet — HashSet + maintains insertion order
+│   └── TreeSet — backed by a Red-Black Tree, O(log n), maintains sorted order
+└── Queue / Deque
+    ├── PriorityQueue — binary heap, O(log n) insert/remove, orders by priority/Comparator
+    └── ArrayDeque — resizable array, O(1) at both ends
+
+Map (key-value pairs, NOT a Collection subtype — a common trivia point)
+├── HashMap — O(1) average, no ordering guarantee
+├── LinkedHashMap — HashMap + maintains insertion (or access) order
+├── TreeMap — Red-Black Tree, O(log n), maintains sorted key order
+└── Hashtable — legacy, synchronized (thread-safe) version of HashMap, largely superseded
+```
+
+**`ArrayList` vs `LinkedList` (mirrors the DSA guide's Arrays vs Linked Lists comparison directly):** `ArrayList` for O(1) random access and better cache locality (the default choice in most real-world code); `LinkedList` for frequent insertion/deletion at arbitrary positions **given an existing iterator** — in practice, `ArrayList` is used far more often, since Java's `LinkedList` also carries more per-node memory overhead than a raw linked list due to object header overhead per node.
+
+**`HashMap` internals (commonly asked in depth):** Uses an array of "buckets," each holding a linked list (or, since Java 8, a **balanced tree** if a single bucket accumulates too many entries — 8+ — improving worst-case lookup from O(n) to O(log n) for pathological hash-collision scenarios) of entries hashing to that index. **Load factor** (default 0.75) triggers a **resize** (doubling capacity, rehashing all entries) once the map's size exceeds `capacity × loadFactor` — the same amortized-cost reasoning covered in the DSA guide's Hash Map section applies directly.
+
+**`HashMap` vs `Hashtable` vs `ConcurrentHashMap` (commonly asked three-way comparison):**
+| | `HashMap` | `Hashtable` | `ConcurrentHashMap` |
+|---|---|---|---|
+| Thread-safe | No | Yes (whole-map `synchronized` — coarse-grained, contends heavily) | Yes (fine-grained locking/lock-free techniques — segments/buckets, much better concurrent throughput) |
+| Allows null keys/values | Yes (one null key, multiple null values) | No | No |
+| Performance (single-threaded) | Fastest | Slower (unnecessary synchronization overhead) | Slightly slower than HashMap due to concurrency-safety mechanisms |
+| Modern recommendation | Default for single-threaded use | **Legacy — avoid** in new code | Default for concurrent/multithreaded use |
+
+**`Comparable` vs `Comparator` (commonly asked to distinguish):** `Comparable` (`compareTo()`) defines a class's **single, natural default ordering**, implemented **by the class itself** (e.g., `String` implements `Comparable<String>` for lexicographic order). `Comparator` (`compare()`) defines an **external, arbitrary ordering**, useful for sorting by criteria different from (or in addition to) the natural order, or for classes you can't modify — you can define **multiple** different `Comparator`s for the same class, unlike the single `Comparable` implementation a class can have.
+```java
+List<Person> people = ...;
+Collections.sort(people); // uses Person's natural Comparable ordering, if defined
+people.sort(Comparator.comparing(Person::getAge).thenComparing(Person::getName)); // custom, chained ordering
+```
+
+---
+
+## 13. Generics
+
+Enable classes/methods to operate on types specified as parameters, providing compile-time type safety without needing to write type-specific duplicate code (ties directly to the OOP guide's parametric polymorphism discussion).
+
+```java
+class Box<T> {
+    private T value;
+    public void set(T value) { this.value = value; }
+    public T get() { return value; }
+}
+Box<String> stringBox = new Box<>();
+```
+
+**Type Erasure (the defining, and most commonly asked-about, characteristic of Java generics):** Generic type information exists **only at compile time** — the compiler uses it for type checking, then **erases** it, replacing generic type parameters with their bound (`Object`, if unbounded) in the actual compiled bytecode, and inserting the necessary casts automatically. At **runtime**, a `List<String>` and a `List<Integer>` are literally the **same** class (`List`) — there's no way to inspect the generic type parameter via reflection at runtime.
+
+```java
+List<String> strings = new ArrayList<>();
+List<Integer> integers = new ArrayList<>();
+System.out.println(strings.getClass() == integers.getClass()); // true — same class after erasure!
+```
+
+**Practical consequences of type erasure (commonly asked "why can't you do X with generics" questions):**
+- Cannot create an array of a generic type directly (`new T[10]` is illegal) — since the runtime doesn't know `T`'s actual type to create the correctly-typed array.
+- Cannot use `instanceof` with a parameterized type (`obj instanceof List<String>` is illegal — only `obj instanceof List` is allowed) — the runtime has no generic type information to check against.
+- Cannot overload methods that would only differ by generic type parameter after erasure (`void method(List<String> l)` and `void method(List<Integer> l)` would erase to identical signatures — a compile error).
+
+**Bounded type parameters & wildcards (commonly asked, especially PECS):**
+```java
+class NumberBox<T extends Number> { ... } // T must be a Number or subclass — enables calling Number methods on T
+
+void printAll(List<? extends Number> list) { ... }  // "? extends" — read-only/producer, accepts List<Integer>, List<Double>, etc.
+void addNumbers(List<? super Integer> list) { ... }  // "? super" — write-only/consumer, accepts List<Integer>, List<Number>, List<Object>
+```
+**PECS mnemonic ("Producer Extends, Consumer Super") — a very commonly asked rule of thumb:** Use `? extends T` when you only need to **read/produce** values **from** the collection (you can safely treat every element as *at least* a `T`); use `? super T` when you only need to **write/consume** values **into** the collection (you can safely insert a `T` since the collection accepts *at least* a `T` or its supertypes).
+
+---
+
+## 14. Interfaces vs Abstract Classes (Java Specifics)
+
+*(General theory covered in the OOP guide, Section 9 — here focused on Java's specific evolution/rules.)*
+
+**Java 8+ interface enhancements (commonly asked, since they blurred the classic interface/abstract-class line):**
+- **Default methods**: interfaces can now provide a method **implementation**, inherited by implementing classes unless overridden — introduced specifically to allow adding new methods to existing interfaces (e.g., `Collection.stream()`) without breaking every existing implementing class (which would otherwise fail to compile, missing the new method).
+- **Static methods**: interfaces can define `static` utility methods callable directly on the interface itself (e.g., `List.of(...)`, `Comparator.comparing(...)`).
+- **Private methods** (Java 9+): interfaces can have private helper methods, used internally by their own default/static methods, without exposing them as part of the public contract.
+
+**Diamond problem with default methods (commonly asked follow-up):** If a class implements two interfaces that both provide a **conflicting** default method with the same signature, the compiler forces the implementing class to **explicitly override** and resolve the conflict (optionally calling a specific parent's version via `InterfaceName.super.methodName()`) — Java doesn't silently pick one, avoiding the ambiguity that plagues true multiple inheritance (ties directly to the OOP guide's Diamond Problem discussion).
+
+**What interfaces still cannot have (the remaining, defining distinction from abstract classes):** Instance fields (only `public static final` constants); constructors; and cannot maintain per-instance mutable state — a class can implement **many** interfaces but extend only **one** class (single inheritance for classes remains a hard Java rule, even post-Java 8).
+
+---
+
+## 15. Multithreading & Concurrency
+
+*(Builds directly on the OS guide's Threads/Scheduling/Synchronization sections — here with Java-specific APIs.)*
+
+**Creating threads (two classic approaches, commonly asked):**
+```java
+// Approach 1: extend Thread
+class MyThread extends Thread {
+    public void run() { System.out.println("Running"); }
+}
+new MyThread().start(); // start() launches a new OS thread; calling run() directly would NOT — a classic trivia trap
+
+// Approach 2: implement Runnable (generally preferred — doesn't burn Java's single inheritance slot)
+class MyTask implements Runnable {
+    public void run() { System.out.println("Running"); }
+}
+new Thread(new MyTask()).start();
+```
+
+**`start()` vs `run()` (a classic, very commonly asked trap):** Calling `.start()` creates a **new** thread of execution and eventually invokes `run()` **on that new thread**. Calling `.run()` **directly** just executes the method's code synchronously on the **current** thread, like any ordinary method call — no new thread is created at all. A very common beginner bug and interview trivia question.
+
+**Thread pools & `ExecutorService` (the modern preferred approach over manual thread management, ties to the OS guide's thread-pool discussion):**
+```java
+ExecutorService executor = Executors.newFixedThreadPool(4);
+executor.submit(() -> System.out.println("Task running"));
+executor.shutdown();
+```
+Manages a bounded pool of reusable worker threads, avoiding the overhead of constantly creating/destroying threads per task, and providing structured lifecycle management (submission, shutdown, awaiting completion) — the strongly preferred approach in real-world Java code over manually instantiating `Thread` objects directly.
+
+**`Future` and `CompletableFuture` (Java 8+, for asynchronous result handling):**
+```java
+Future<Integer> future = executor.submit(() -> computeSomething());
+Integer result = future.get(); // blocks until the computation completes
+
+CompletableFuture<Integer> cf = CompletableFuture.supplyAsync(() -> computeSomething())
+    .thenApply(x -> x * 2)          // chain a transformation once the result is ready
+    .thenAccept(System.out::println); // consume the final result — all without manually blocking
+```
+`CompletableFuture` supports composable, non-blocking chaining of asynchronous operations (map/transform/combine multiple futures) — a significant improvement over plain `Future`'s blocking-only `.get()`.
+
+---
+
+## 16. `synchronized`, Locks, and the `volatile` Keyword
+
+*(Directly parallels the OS guide's Mutex section — `synchronized` is Java's built-in mutex mechanism.)*
+
+**`synchronized` keyword:** Ensures only one thread can execute a given block/method on a given object (or class, for static methods) at a time — Java's built-in, language-level mutex, with automatic lock acquisition/release (even across exceptions, similar in spirit to RAII, but scoped to the block/method rather than an object's lifetime).
+```java
+synchronized void increment() { count++; }        // locks on 'this' — the current object instance
+
+void method() {
+    synchronized (someObject) { ... }              // locks on an arbitrary explicit object — a "synchronized block"
+}
+
+static synchronized void staticMethod() { ... }    // locks on the Class object itself, shared across ALL instances
+```
+
+**`ReentrantLock` (`java.util.concurrent.locks`) vs `synchronized` (commonly asked to compare):**
+| | `synchronized` | `ReentrantLock` |
+|---|---|---|
+| Acquisition | Implicit, block-scoped | Explicit `.lock()`/`.unlock()` calls |
+| Try-lock with timeout | Not supported | Supported (`tryLock(timeout)`) — avoid blocking indefinitely |
+| Interruptible waiting | Not supported | Supported (`lockInterruptibly()`) |
+| Fairness policy | Not configurable | Configurable (can construct a "fair" lock, granting access in request order) |
+| Condition variables | Single implicit one (`wait()`/`notify()`) | Multiple explicit `Condition` objects per lock, for finer-grained signaling |
+| Risk if forgetting to release | N/A — automatically released, even on exception | **Must manually `unlock()` in a `finally` block** — real risk of a permanently held lock if forgotten |
+
+**"Reentrant" (both are reentrant — commonly asked what this means):** The **same thread** that already holds the lock can acquire it again (e.g., a synchronized method calling another synchronized method on the same object) without deadlocking itself — the JVM/lock tracks a hold count, only fully releasing once the count returns to zero.
+
+**`volatile` keyword (a very commonly asked, frequently misunderstood keyword):** Guarantees that reads/writes to the variable are **directly visible across threads** (preventing threads from caching a stale value in a CPU register/local cache) and establishes a **happens-before** relationship (Section 17) — but it does **NOT** provide atomicity for compound operations. `volatile int counter; counter++;` is **still not thread-safe**, because `++` is actually a read-modify-write sequence of three separate steps (read, increment, write) that can still interleave incorrectly between threads, even with `volatile` ensuring each individual read/write is visible.
+
+**Interview trap:** *"Does marking a variable `volatile` make `counter++` thread-safe?"* No — `volatile` only guarantees **visibility**, not **atomicity** of compound operations. For atomic increment, use `AtomicInteger` (ties to the C++ guide's `std::atomic` discussion) or synchronize the entire read-modify-write sequence explicitly.
+
+---
+
+## 17. Java Memory Model (JMM)
+
+Defines the rules for how/when changes made by one thread to shared memory become **visible** to other threads — essential because modern CPUs and compilers aggressively reorder instructions and cache values in ways that would otherwise make multithreaded code behave unpredictably without explicit rules.
+
+**Happens-before relationship (the core formal concept, commonly asked to name if the role involves any concurrency depth):** If action A "happens-before" action B, then A's effects (memory writes) are **guaranteed visible** to B. The JMM establishes several concrete happens-before rules, including:
+- A `synchronized` block's unlock happens-before a subsequent lock on the **same** monitor by another thread.
+- A write to a `volatile` variable happens-before every subsequent read of that same variable.
+- A thread's `Thread.start()` call happens-before any action in the newly started thread.
+- All actions in a thread happen-before another thread successfully returns from a `Thread.join()` on it.
+
+**Why this matters practically (the intuition interviewers want, more than the formal spec):** Without proper synchronization (`synchronized`, `volatile`, or other JMM-recognized happens-before-establishing constructs), one thread's write to a shared variable might **never become visible** to another thread at all (not just "eventually" visible — potentially never, due to caching/reordering), or might become visible in a different order than the writing thread executed them — the root theoretical cause behind subtle, hard-to-reproduce concurrency bugs that "usually work" but occasionally fail unpredictably.
+
+---
+
+## 18. Streams & Lambdas (Java 8+)
+
+**Lambda expressions:** A concise syntax for implementing a **functional interface** (an interface with exactly one abstract method) inline, without a full anonymous class.
+```java
+Runnable r = () -> System.out.println("Running");         // implements Runnable's single run() method
+Comparator<String> byLength = (a, b) -> a.length() - b.length();
+```
+
+**Common built-in functional interfaces (`java.util.function`, worth knowing the shapes of):** `Function<T,R>` (takes T, returns R), `Predicate<T>` (takes T, returns boolean), `Consumer<T>` (takes T, returns void), `Supplier<T>` (takes nothing, returns T), `BiFunction<T,U,R>` (two-argument version of Function).
+
+**Streams API:** A functional, declarative way to process sequences of data (collections, arrays, I/O sources) via a pipeline of **intermediate operations** (lazy, don't execute until a terminal operation is invoked — `map`, `filter`, `sorted`) followed by a single **terminal operation** (triggers actual execution — `collect`, `forEach`, `reduce`, `count`).
+```java
+List<String> result = people.stream()
+    .filter(p -> p.getAge() > 18)      // intermediate — lazy
+    .map(Person::getName)              // intermediate — lazy
+    .sorted()                          // intermediate — lazy
+    .collect(Collectors.toList());     // terminal — triggers the entire pipeline to actually execute
+```
+
+**Lazy evaluation (commonly asked to explain the practical implication):** Intermediate operations build up a processing pipeline **without actually iterating the data** until a terminal operation is invoked — this allows optimizations like **short-circuiting** (e.g., `findFirst()` can stop processing as soon as a match is found, without evaluating the rest of a potentially huge/infinite stream) and avoids unnecessary intermediate collection materialization between each step (each element flows through the entire pipeline one at a time, rather than each stage fully processing the whole collection before the next stage begins).
+
+**Parallel Streams (`.parallelStream()`):** Automatically splits the stream's processing across multiple threads (backed by the common `ForkJoinPool`) — can improve throughput for large, CPU-bound, and **independent** (no shared mutable state, no ordering dependency) operations, but adds overhead that can make it **slower** than sequential processing for small collections or I/O-bound work, and introduces the same shared-state thread-safety concerns as any multithreaded code if the pipeline isn't purely stateless/side-effect-free — worth mentioning this isn't a free performance win to reach for by default.
+
+---
+
+## 19. Object Class Methods
+
+Every Java class implicitly extends `Object`, inheriting several methods commonly asked about:
+
+- **`toString()`**: Default implementation returns `ClassName@hashCodeInHex` — almost always worth overriding for meaningful debug/logging output.
+- **`equals()` / `hashCode()`**: Covered in depth in Section 5 — default is reference-identity comparison.
+- **`clone()`**: Creates a copy of the object — requires implementing the `Cloneable` marker interface and is widely considered a flawed, awkward API in modern Java (shallow-copies by default, easy to misuse); copy constructors or copy factory methods are generally preferred in idiomatic modern code.
+- **`getClass()`**: Returns the runtime `Class` object representing the object's actual type — the basis for Java's reflection capabilities.
+- **`wait()` / `notify()` / `notifyAll()`**: Low-level thread coordination primitives (must be called from within a `synchronized` block on the same monitor) — `wait()` releases the lock and blocks the calling thread until `notify()`/`notifyAll()` is called on the same object by another thread; largely superseded in modern code by higher-level `java.util.concurrent` utilities (`ExecutorService`, `CompletableFuture`, explicit `Condition` objects), but worth knowing they exist as the foundational low-level mechanism.
+
+---
+
+## 20. Rapid-Fire Interview Q&A
+
+**Q: Is Java pass-by-value or pass-by-reference?**
+Always pass-by-value — but for objects, the value passed is a copy of the reference itself, allowing mutation of the referenced object's state (visible to the caller) while preventing reassignment of the caller's original reference variable from propagating back.
+
+**Q: What breaks if you override `equals()` without also overriding `hashCode()`?**
+Hash-based collections (`HashMap`, `HashSet`) can silently fail to find "equal" objects, since they might hash into different buckets under the default `Object.hashCode()` (identity-based), violating the contract that equal objects must share a hash code.
+
+**Q: Why are Java Strings immutable?**
+Enables safe String Pool caching/sharing, thread-safety without synchronization, and safety as `HashMap` keys (whose hash code must remain stable) — plus general security benefits from preventing mutation of sensitive string data after validation.
+
+**Q: `StringBuilder` vs `StringBuffer` — which should you default to?**
+`StringBuilder` — `StringBuffer`'s built-in synchronization is usually unneeded overhead for typical single-threaded string-building use cases; `StringBuffer` is now largely legacy.
+
+**Q: What is type erasure, and what does it prevent you from doing?**
+Generic type parameters exist only at compile time and are erased to their bound (usually `Object`) in compiled bytecode — prevents creating generic arrays directly, using `instanceof` with a parameterized type, and overloading methods that only differ by generic type parameter.
+
+**Q: `start()` vs `run()` on a `Thread` — what's the actual difference?**
+`start()` creates a genuinely new thread of execution and eventually calls `run()` on it; calling `run()` directly just executes synchronously on the current thread like a normal method call, with no new thread created.
+
+**Q: Does `volatile` make a compound operation like `counter++` thread-safe?**
+No — `volatile` only guarantees visibility of the latest value across threads, not atomicity of multi-step read-modify-write operations; use `AtomicInteger` or explicit synchronization for atomic compound operations.
+
+**Q: `HashMap` vs `ConcurrentHashMap` — when would you use each?**
+`HashMap` for single-threaded use (fastest, no thread-safety); `ConcurrentHashMap` for concurrent/multithreaded access (fine-grained internal locking, much better concurrent throughput than the legacy fully-synchronized `Hashtable`).
+
+**Q: Why is Java considered both compiled and interpreted?**
+Source is compiled ahead-of-time to platform-independent bytecode (`javac`), which the JVM then interprets and/or JIT-compiles to native machine code at runtime — it spans both models rather than being purely one or the other.
+
+**Q: What's the PECS mnemonic for wildcards, and what does it mean?**
+"Producer Extends, Consumer Super" — use `? extends T` when only reading/producing values from a generic collection; use `? super T` when only writing/consuming values into one.
+
+---
+
+## Suggested Study Approach
+1. Be able to explain pass-by-value-of-reference, the `equals()`/`hashCode()` contract, and the Integer caching gotcha fluently — these three are asked in the overwhelming majority of Java interviews.
+2. Practice explaining generational garbage collection and why "most objects die young" motivates the young/old generation split — a very common conceptual deep-dive question.
+3. Rehearse `synchronized` vs `ReentrantLock` and the meaning of `volatile` (visibility, not atomicity) — pair this with the OS guide's Synchronization section for the underlying theory.
+4. Pair this guide with the OOP guide (Java is a direct, idiomatic implementation of nearly everything covered there) and the DSA guide (the Collections Framework section here maps one-to-one onto those general data structures).
+5. Practice writing a short Streams pipeline (filter/map/collect) and explaining lazy evaluation and the intermediate/terminal operation distinction out loud — a common live-coding warm-up in modern Java interviews.

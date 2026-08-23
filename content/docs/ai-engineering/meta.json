@@ -1,0 +1,13 @@
+{
+  "title": "AI Engineering",
+  "pages": [
+    "index",
+    "embeddings-vector-databases",
+    "rag",
+    "prompt-engineering",
+    "ai-agents",
+    "fine-tuning",
+    "inference-optimization",
+    "evaluation"
+  ]
+}

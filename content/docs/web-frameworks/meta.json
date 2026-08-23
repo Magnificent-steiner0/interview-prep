@@ -1,0 +1,10 @@
+{
+  "title": "Web & App Frameworks",
+  "pages": [
+    "index",
+    "fastapi",
+    "nextjs",
+    "react",
+    "flutter"
+  ]
+}

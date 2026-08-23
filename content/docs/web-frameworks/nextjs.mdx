@@ -1,0 +1,432 @@
+---
+title: "Next.js"
+description: "Covers Next.js's core mechanics: rendering strategies (SSR/SSG/ISR/CSR), the App Router and React Server Components, routing, data fetching, caching, API routes, and deployment ..."
+---
+Covers Next.js's core mechanics: rendering strategies (SSR/SSG/ISR/CSR), the App Router and React Server Components, routing, data fetching, caching, API routes, and deployment — building directly on the JavaScript guide's event-loop/async material and anticipating the upcoming React guide's component model.
+
+---
+
+## Table of Contents
+1. [What Next.js Is & Why It Exists](#1-what-next-js-is--why-it-exists)
+2. [Rendering Strategies: CSR vs SSR vs SSG vs ISR](#2-rendering-strategies-csr-vs-ssr-vs-ssg-vs-isr)
+3. [App Router vs Pages Router](#3-app-router-vs-pages-router)
+4. [File-Based Routing](#4-file-based-routing)
+5. [React Server Components (RSC) vs Client Components](#5-react-server-components-rsc-vs-client-components)
+6. [Data Fetching in the App Router](#6-data-fetching-in-the-app-router)
+7. [Caching in Next.js (the Four Layers)](#7-caching-in-nextjs-the-four-layers)
+8. [Server Actions](#8-server-actions)
+9. [API Routes / Route Handlers](#9-api-routes--route-handlers)
+10. [Layouts, Templates, and Loading/Error UI](#10-layouts-templates-and-loadingerror-ui)
+11. [Middleware](#11-middleware)
+12. [Image & Font Optimization](#12-image--font-optimization)
+13. [Static Params & Dynamic Routes](#13-static-params--dynamic-routes)
+14. [Hydration](#14-hydration)
+15. [Environment Variables](#15-environment-variables)
+16. [Deployment & Edge vs Node Runtime](#16-deployment--edge-vs-node-runtime)
+17. [Rapid-Fire Interview Q&A](#17-rapid-fire-interview-qa)
+
+---
+
+## 1. What Next.js Is & Why It Exists
+
+**Next.js** is a **React framework** (built by Vercel) that adds the production infrastructure React itself deliberately doesn't provide — routing, server-side rendering, data-fetching conventions, bundling/optimization, and deployment tooling — solving problems that plain **client-side-rendered** React apps (created with, e.g., Create React App or a bare Vite+React setup) run into at scale.
+
+**Problems plain client-rendered React has that Next.js addresses (commonly asked to articulate, since this motivates nearly everything else in this guide):**
+- **SEO**: a pure client-rendered ("CSR") app initially serves an almost-empty HTML shell (`<div id="root"></div>`), with content injected only after JavaScript downloads and executes — search engine crawlers and social-media link previews historically struggled with (or entirely failed to see) this content, since it doesn't exist in the initial HTML response at all.
+- **Initial load performance**: the user sees a blank page (or a loading spinner) until the entire JS bundle downloads, parses, executes, and renders — especially painful on slow networks/devices.
+- **No built-in routing, data-fetching conventions, or code-splitting strategy** — plain React (the library) intentionally leaves these as concerns for the developer/ecosystem to solve, and Next.js is one of the most widely adopted "batteries-included" solutions.
+
+Next.js addresses these primarily through **server-side rendering** and a suite of rendering strategies (Section 2), letting a page's initial HTML be meaningful (crawlable, immediately visible) **before** any client-side JavaScript runs.
+
+---
+
+## 2. Rendering Strategies: CSR vs SSR vs SSG vs ISR
+
+The single most foundational, most commonly asked Next.js conceptual question — a strong candidate should be able to define and contrast all four crisply, with a concrete "when would you use this" example for each.
+
+**CSR (Client-Side Rendering)**: The server sends a minimal HTML shell; the browser downloads the JS bundle, then React renders everything **in the browser**. Traditional plain-React behavior.
+- **Pros**: highly interactive once loaded, minimal server load per request (heavy lifting shifted to the client).
+- **Cons**: poor initial load performance and SEO (per Section 1), blank/loading state until JS executes.
+- **When**: highly interactive, behind-a-login dashboards/apps where SEO is irrelevant and the user already expects a brief load (e.g., an admin panel).
+
+**SSR (Server-Side Rendering)**: The server renders the **full HTML for the requested page** on **every request**, sending complete, populated HTML to the browser immediately — React then "hydrates" (Section 14) it client-side to make it interactive.
+- **Pros**: fast meaningful first paint, good SEO (crawlers see real content immediately), always reflects the latest data (rendered fresh per request).
+- **Cons**: higher server load (re-renders on every single request) and generally higher Time-To-First-Byte than pre-built static pages, since rendering work happens live, per-request.
+- **When**: pages with frequently changing, user-specific, or request-dependent data that must always be fresh (e.g., a personalized dashboard, a page whose content depends on request headers/cookies).
+
+**SSG (Static Site Generation)**: The HTML is rendered **once, at build time** (when you run `next build`), producing a static HTML file served identically to every visitor — effectively pre-computed SSR, done ahead of time instead of per-request.
+- **Pros**: the fastest possible serving (just a static file, cacheable at a CDN edge — ties directly to the Networking guide's CDN section), minimal server load (no per-request rendering work at all), excellent SEO.
+- **Cons**: content is only as fresh as the last build — doesn't reflect data changes until the site is **rebuilt and redeployed**.
+- **When**: content that changes infrequently (marketing pages, blog posts, documentation) where build-time freshness is acceptable.
+
+**ISR (Incremental Static Regeneration)**: A hybrid — pages are statically generated (like SSG) but can be **automatically regenerated in the background** after a specified time interval (or on-demand via a revalidation trigger), **without** requiring a full site rebuild/redeploy.
+- **Pros**: combines SSG's serving speed with the ability to keep content reasonably fresh, without the cost of full SSR's per-request rendering or the operational overhead of a full rebuild for every content change.
+- **Cons**: there's a window where **stale** content can be served (until the background regeneration completes) — a deliberate, tunable trade-off, not a bug.
+- **When**: content that changes periodically but not on every single request (e.g., a product catalog page, a news homepage) — "mostly static, but should eventually catch up to changes."
+
+**Comparison table (a very commonly asked summary, worth memorizing):**
+| | CSR | SSR | SSG | ISR |
+|---|---|---|---|---|
+| When rendered | In the browser | Per request, on the server | Once, at build time | At build time, then periodically refreshed |
+| SEO | Poor | Good | Good | Good |
+| Freshness | Always current (client fetches live) | Always current | Stale until next rebuild | Eventually consistent (configurable staleness window) |
+| Server load | Low | High (every request) | Very low (just serving static files) | Low (regeneration only occasionally) |
+
+**Interview trap:** *"Isn't SSR always better than SSG since it's always fresh?"* No — SSR trades freshness for **cost and latency**: every single request re-executes the full render (server compute cost, and typically slower Time-To-First-Byte than serving a pre-built static file from a CDN edge) — for content that doesn't need per-request freshness, SSG (or ISR) is strictly more efficient and should be preferred; SSR should be a deliberate choice for genuinely request-dependent or highly volatile content, not a default.
+
+---
+
+## 3. App Router vs Pages Router
+
+Next.js currently has **two** routing systems — a commonly asked "explain the history/difference" question, since many production codebases and tutorials still use the older system.
+
+**Pages Router (`pages/` directory, the original system):** File-based routing where each file in `pages/` becomes a route; data fetching handled via exported functions per page (`getServerSideProps` for SSR, `getStaticProps`/`getStaticPaths` for SSG/ISR); all components in `pages/` are **Client Components** by default (rendered/hydrated on the client, though the initial HTML can still be server-rendered via those data-fetching functions).
+
+**App Router (`app/` directory, introduced in Next.js 13, now the recommended default):** Built around **React Server Components** (Section 5) as the default — components are server-rendered by default (not just the initial HTML, but the actual component execution happens on the server, with only explicitly-marked interactive parts shipped as client-side JS); introduces layouts, nested routing, streaming, and Server Actions (Section 8) as first-class concepts; data fetching happens directly in components via `async`/`await`, rather than separate exported functions.
+
+**Key differences (commonly asked to summarize):**
+| | Pages Router | App Router |
+|---|---|---|
+| Default component model | Client Components (all JS ships to the browser) | Server Components (zero JS shipped by default, unless marked `"use client"`) |
+| Data fetching | Special exported functions (`getServerSideProps`, etc.) per page | Directly `await` inside async Server Components |
+| Layouts | Manual, via a custom `_app.js`/`_document.js` | Native, nested `layout.js` files (Section 10) |
+| Streaming/Suspense | Limited support | Native support, built around React Suspense |
+| Current status | Still supported (legacy), being phased toward App Router | Recommended default for new projects |
+
+**Interview trap:** *"Should new projects use the Pages Router?"* Generally no — the App Router is the current recommended default, offering Server Components, nested layouts, streaming, and Server Actions the Pages Router doesn't natively support — but understanding the Pages Router remains valuable since a large volume of existing production Next.js code (and interview questions) still reference it, and migration between the two is itself a commonly discussed real-world topic.
+
+---
+
+## 4. File-Based Routing
+
+Both routers use the **file system itself** as the routing configuration — a folder/file's location and name directly determines its URL, eliminating the need for a separate, manually maintained route-configuration file (contrasting with router libraries like React Router, covered in the upcoming React guide, which typically use explicit route declarations).
+
+**App Router conventions (commonly asked to recognize):**
+```
+app/
+├── page.js              → /                    (the UI for a route segment)
+├── about/
+│   └── page.js           → /about
+├── blog/
+│   ├── page.js            → /blog
+│   └── [slug]/
+│       └── page.js         → /blog/:slug         (dynamic segment)
+├── shop/
+│   └── [...categories]/
+│       └── page.js         → /shop/*             (catch-all segment — matches any number of path parts)
+└── dashboard/
+    ├── layout.js          → shared layout wrapping all routes under /dashboard
+    └── settings/
+        └── page.js         → /dashboard/settings
+```
+
+**Special file conventions within the App Router (each with a specific reserved role, commonly asked to name a few):** `page.js` (the actual route UI — only files named exactly this become publicly routable, meaning you can colocate helper components/utilities in the same folder without accidentally creating unwanted routes), `layout.js` (shared UI wrapping child routes, Section 10), `loading.js` (an automatic Suspense fallback shown while the route segment loads), `error.js` (an automatic error boundary for the route segment), `not-found.js` (custom 404 UI).
+
+**Dynamic segments (`[param]`), catch-all segments (`[...param]`), and optional catch-all (`[[...param]]`)**: syntax for capturing dynamic URL parts as route parameters, directly available to the page component as `props.params`.
+
+---
+
+## 5. React Server Components (RSC) vs Client Components
+
+The single most conceptually significant, most commonly asked App Router topic — a genuinely new component execution model, not merely a Next.js-specific quirk (RSC is a React feature; Next.js's App Router is one implementation/adopter of it).
+
+**Server Components (the App Router default — no directive needed):** Rendered **entirely on the server**, and their JavaScript code is **never sent to the browser at all** — the server executes the component (including any data fetching, Section 6), produces a serialized description of the resulting UI, and streams that to the client, which React then reconciles into the DOM. The browser never downloads, parses, or executes the Server Component's own code.
+
+**Client Components (opt-in via the `"use client"` directive at the top of a file):** Behave like traditional React components — their code **is** shipped to and executed in the browser, enabling interactivity (event handlers, `useState`, browser-only APIs, effects).
+```javascript
+"use client";  // marks this file AND everything it imports as part of the client bundle
+
+import { useState } from "react";
+
+export default function Counter() {
+    const [count, setCount] = useState(0);
+    return <button onClick={() => setCount(count + 1)}>{count}</button>;
+}
+```
+
+**Why this distinction matters (the core practical benefit, commonly asked to articulate):**
+- **Reduced JavaScript bundle size**: any component that doesn't need interactivity (most "display" components — rendering fetched data, static layout, markdown content) ships **zero** JS to the client, directly improving load performance, parse/execution time, and Time-To-Interactive — a meaningful, often dramatic improvement over an all-Client-Component (traditional CSR/Pages-Router-style) approach.
+- **Direct server-side data access**: Server Components can `await` a database query or call a backend service **directly inside the component**, with zero client-side network round-trip or exposed API endpoint needed for that data — the credentials/connection logic never reaches the browser.
+
+**Rules and constraints (very commonly tested — a favorite "spot the bug" interview format):**
+- Server Components **cannot** use `useState`, `useEffect`, event handlers (`onClick`, etc.), or any browser-only API — these all require the code to actually run in the browser, which Server Components structurally don't do.
+- A Client Component **can** be imported and rendered *inside* a Server Component (a very common, encouraged pattern — keep the interactive "island" small and let everything else remain a zero-JS Server Component) — but a Server Component generally **cannot** be imported directly inside a Client Component's module in the usual way (since once you're in client territory, everything nested normally follows, though it **can** be passed down as `children`/props from a parent Server Component — an advanced but occasionally asked pattern called "passing Server Components as props").
+- The `"use client"` boundary is **contagious downward**: everything a `"use client"` file imports also becomes part of the client bundle (the directive marks the boundary, not just that single file).
+
+**Interview trap:** *"If I need just one button with an `onClick` on an otherwise static page, do I need to make the whole page a Client Component?"* No — and doing so would be a common, costly mistake. The idiomatic pattern is to keep the page itself a Server Component, and extract **only** the interactive button into its own small `"use client"` component, imported and rendered within the server-rendered page — minimizing the amount of JavaScript actually shipped to the browser to just that one small interactive "island."
+
+---
+
+## 6. Data Fetching in the App Router
+
+In Server Components, data fetching is refreshingly direct — `async`/`await` **inside the component itself**, no special hooks or exported functions needed (a major departure from the Pages Router's `getServerSideProps`/`getStaticProps` convention, and a direct application of the Python/JS guides' `async`/`await` mechanics, just executed server-side).
+
+```javascript
+// This is a Server Component (no "use client") — fetching happens on the SERVER
+async function BlogPost({ params }) {
+    const post = await fetch(`https://api.example.com/posts/${params.slug}`).then(r => r.json());
+    return <article><h1>{post.title}</h1><p>{post.content}</p></article>;
+}
+```
+
+**Parallel vs sequential data fetching (a commonly tested performance concern, directly parallel to the JavaScript guide's `Promise.all` discussion):**
+```javascript
+// SLOW — sequential (waterfall): the second fetch doesn't even START until the first fully completes
+async function Page() {
+    const user = await getUser();
+    const posts = await getPosts();  // waits needlessly, even though it doesn't depend on 'user'
+}
+
+// FAST — parallel: both requests start immediately, together
+async function Page() {
+    const [user, posts] = await Promise.all([getUser(), getPosts()]);
+}
+```
+This is the exact same "sequential vs concurrent `await`" performance trap covered in the JavaScript guide (Section 14 there), now specifically applied to Server Component data fetching.
+
+**Streaming with Suspense (a genuinely new capability enabled by Server Components, commonly asked to explain):** Wrapping a slow-fetching component in React's `<Suspense>` (paired with the App Router's `loading.js` convention, Section 10) lets the server **stream** the page's HTML incrementally — the fast parts of the page render and reach the browser immediately, while the slow part shows a fallback (skeleton/spinner) and streams in **once its data resolves**, without blocking the rest of the page from being usable in the meantime — directly improving perceived performance over waiting for the single slowest data source before sending *any* HTML.
+
+---
+
+## 7. Caching in Next.js (the Four Layers)
+
+A very commonly asked, notoriously nuanced App Router topic — Next.js applies **aggressive caching by default** at multiple distinct layers, and misunderstanding these layers is a frequent real-world source of "why isn't my data updating" confusion, making this a favorite interview probe.
+
+1. **Request Memoization**: Within a **single render pass**, identical `fetch()` calls (same URL + options) are automatically deduplicated — if multiple components in the same tree fetch the same data, only **one** actual network request is made, with the result shared — purely a per-request optimization, not a cache that persists across different requests/users.
+
+2. **Data Cache**: `fetch()` results can be **persistently cached across requests and deployments** (by default, in App Router's original design, `fetch` calls were cached indefinitely unless configured otherwise — this default has evolved across Next.js versions, so behavior should always be verified against current docs for a specific version) — configurable per-call:
+```javascript
+fetch(url, { cache: "force-cache" });                    // cache indefinitely (SSG-like behavior)
+fetch(url, { cache: "no-store" });                        // never cache — always fetch fresh (SSR-like behavior)
+fetch(url, { next: { revalidate: 60 } });                  // cache, but revalidate at most every 60 seconds (ISR-like behavior)
+```
+This is precisely how the App Router **unifies** the SSR/SSG/ISR spectrum (Section 2) into a single `fetch`-level configuration, rather than requiring entirely different page-level function exports as the Pages Router did.
+
+3. **Full Route Cache**: The **rendered HTML and RSC payload** for a route can be cached at build time (for routes without dynamic, per-request data) and reused across requests — this is what makes a Server Component route behave like SSG when its data is cacheable.
+
+4. **Router Cache (client-side)**: An **in-browser** cache of visited route segments, enabling instant back/forward navigation and prefetching (Next.js's `<Link>` component automatically prefetches linked routes in the background when they scroll into view) — distinct from the three server-side caching layers above, this one lives entirely in the client.
+
+**Revalidation (invalidating the cache intentionally, ties to the Databases guide's general cache-invalidation discussion):** `revalidatePath()` and `revalidateTag()` (typically called from a Server Action, Section 8, or a webhook-triggered API route) let you explicitly invalidate specific cached data/routes on demand — e.g., after a user submits a form that changes underlying data, rather than waiting for a time-based `revalidate` interval to expire naturally.
+
+**Interview trap:** *"Why might a Next.js app show stale data even after the underlying database changed?"* Because of the Data Cache (layer 2) and/or Full Route Cache (layer 3) — unless a `fetch` call is explicitly configured with `cache: "no-store"`, a short `revalidate` interval, or an explicit `revalidatePath`/`revalidateTag` call after the mutation, Next.js may continue serving a previously cached version — this is one of the single most common sources of real-world confusion/bugs in App Router applications, and a strong interview answer should be able to name the specific caching layer responsible and the specific fix.
+
+---
+
+## 8. Server Actions
+
+**Server Actions**: Functions marked with `"use server"` that can be called **directly from Client (or Server) Components**, executing exclusively on the server — Next.js handles the underlying network request/serialization automatically, without you needing to manually create a separate API route and `fetch` it.
+
+```javascript
+// actions.js
+"use server";
+
+export async function createPost(formData) {
+    const title = formData.get("title");
+    await db.posts.create({ title });
+    revalidatePath("/posts");  // invalidate the cached posts list so it reflects the new post
+}
+```
+```javascript
+// A Client Component using it directly as a form action
+"use client";
+import { createPost } from "./actions";
+
+export default function NewPostForm() {
+    return (
+        <form action={createPost}>
+            <input name="title" />
+            <button type="submit">Create</button>
+        </form>
+    );
+}
+```
+
+**Why this matters (commonly asked to articulate the benefit over a traditional API-route approach):** Eliminates the boilerplate of manually defining a separate API endpoint (Section 9) **and** a corresponding client-side `fetch` call just to perform a simple mutation — the function itself **is** the "endpoint," callable directly, with Next.js handling the request/response plumbing, argument serialization, and (via progressive enhancement) even working as a plain HTML form submission **without JavaScript enabled** in the browser, since `<form action={serverAction}>` is built on the native HTML form-action mechanism.
+
+**Security note (commonly asked, since it's a subtle but important point):** A Server Action is effectively a **public, callable server endpoint** the moment it's referenced from a Client Component — it must independently validate/authorize its inputs and the calling user's permissions **inside the action itself**, exactly as any traditional API endpoint would (ties directly to the Security guide's Authorization section) — the `"use server"` directive provides the mechanism for server-only execution, but not automatic authentication/authorization.
+
+---
+
+## 9. API Routes / Route Handlers
+
+For building actual, traditional REST/API endpoints (consumed by external clients, mobile apps, or webhooks — not just for internal Server Action-style mutations from your own UI).
+
+```javascript
+// app/api/users/route.js — App Router "Route Handler" convention
+export async function GET(request) {
+    const users = await db.users.findMany();
+    return Response.json(users);
+}
+
+export async function POST(request) {
+    const body = await request.json();
+    const user = await db.users.create(body);
+    return Response.json(user, { status: 201 });
+}
+```
+
+**Route Handlers vs Server Actions (a commonly asked "when would you use which" distinction):** Route Handlers define genuine, conventional **HTTP endpoints** at a specific URL (`/api/users`) — appropriate when the endpoint needs to be called by **external** clients (a mobile app, a third-party webhook receiver, a public API), or when you specifically need full control over the HTTP method/headers/status codes. Server Actions (Section 8) are better suited for mutations **originating from your own app's own UI** (form submissions, button-triggered mutations), where the tighter integration (no separate endpoint definition, automatic progressive enhancement) is a net benefit rather than a limitation.
+
+**Route Handlers replace the Pages Router's `pages/api/` convention** in the App Router — functionally similar in purpose (defining server-side API endpoints colocated within the Next.js project) but using named exported functions per HTTP method (`GET`, `POST`, etc., directly mirroring the APIs & HTTP guide's HTTP-method semantics) rather than a single default-exported handler function branching on `req.method`.
+
+---
+
+## 10. Layouts, Templates, and Loading/Error UI
+
+**`layout.js`**: Wraps a route segment and **all of its nested children**, and critically, **persists across navigations** between sibling routes within it — its state is **not** reset/re-rendered when navigating between child pages that share the same layout (e.g., a sidebar in a dashboard layout stays mounted, preserving scroll position/state, as the main content area swaps between different dashboard sub-pages).
+```javascript
+// app/dashboard/layout.js
+export default function DashboardLayout({ children }) {
+    return (
+        <div>
+            <Sidebar />
+            <main>{children}</main>  {/* the matched child page.js renders here */}
+        </div>
+    );
+}
+```
+
+**`template.js`**: Nearly identical to a layout, but **does** re-render (re-mount, resetting state) on every navigation, even between routes sharing the same template — a much less commonly used, narrower-purpose convention (e.g., for enter/exit animations that should replay on every navigation, or resetting state deliberately per-page).
+
+**Layout vs Template (a commonly asked distinguishing question):** Layouts preserve state and don't re-render across navigations within them (better performance, persistent UI like a sidebar/nav); templates create a fresh instance on every navigation (useful specifically when you *want* that reset behavior) — layout is the far more commonly used default; template is a deliberate, narrower exception.
+
+**`loading.js`**: Automatically wraps the route segment's `page.js` in a React `<Suspense>` boundary, showing this file's content as an instant loading UI while the actual page (and any of its own nested async data fetching) is still resolving — ties directly to Section 6's streaming discussion, requiring zero manual `<Suspense>` wiring for this common case.
+
+**`error.js`**: Automatically wraps the route segment in a React Error Boundary — must be a Client Component (`"use client"` required), since error boundaries rely on React lifecycle features not available to Server Components — catches rendering errors within that segment and displays fallback UI instead of crashing the entire page/app.
+
+---
+
+## 11. Middleware
+
+Next.js middleware (`middleware.js` at the project root) runs **before** a request is completed, intercepting it at the edge (Section 16) — used for cross-cutting concerns like authentication redirects, A/B testing, internationalization routing, and request/response header manipulation, directly paralleling the general middleware concept from the FastAPI guide and the reverse-proxy/Chain-of-Responsibility discussion in the Networking guide.
+
+```javascript
+import { NextResponse } from "next/server";
+
+export function middleware(request) {
+    const token = request.cookies.get("token");
+    if (!token && request.nextUrl.pathname.startsWith("/dashboard")) {
+        return NextResponse.redirect(new URL("/login", request.url));
+    }
+    return NextResponse.next();  // allow the request to proceed normally
+}
+
+export const config = {
+    matcher: "/dashboard/:path*",  // restrict which routes this middleware runs on, for performance
+};
+```
+
+**Important constraint (commonly asked, ties to Section 16's Edge Runtime discussion):** Middleware runs on the **Edge Runtime** by default, which is a deliberately restricted execution environment (not full Node.js) — meaning middleware **cannot** use full Node.js-specific APIs (e.g., direct file-system access, many native Node modules) — it's meant to be lightweight and fast, running as close to the user as possible, for quick decisions like redirects/rewrites/header-checks, not for heavy application logic.
+
+---
+
+## 12. Image & Font Optimization
+
+**`next/image`**: Automatically optimizes images — resizing/serving appropriately-sized images per device (responsive `srcset` generation), lazy-loading images that are off-screen by default, serving modern formats (WebP/AVIF) when supported, and preventing **Cumulative Layout Shift** (a Core Web Vitals metric) by requiring explicit width/height (or using `fill`) so the browser can reserve the correct space before the image loads.
+```javascript
+import Image from "next/image";
+<Image src="/photo.jpg" width={800} height={600} alt="A photo" priority />
+```
+`priority` marks an image (typically an above-the-fold hero image) for eager loading/preloading rather than the default lazy-loading behavior — used deliberately for images critical to the initial viewport.
+
+**`next/font`**: Automatically self-hosts and optimizes web fonts (including Google Fonts) at **build time** — eliminating the extra network round-trip to an external font CDN at runtime (which the browser would otherwise need to make, delaying text rendering) and avoiding layout shift from font-swapping, by inlining the necessary font-loading CSS directly.
+
+---
+
+## 13. Static Params & Dynamic Routes
+
+For SSG/ISR (Section 2) with **dynamic** route segments (e.g., `/blog/[slug]`), Next.js needs to know **which** specific slugs to pre-render at build time — provided via `generateStaticParams`.
+
+```javascript
+// app/blog/[slug]/page.js
+export async function generateStaticParams() {
+    const posts = await getAllPosts();
+    return posts.map(post => ({ slug: post.slug }));  // one pre-rendered page per returned object
+}
+
+export default async function BlogPost({ params }) {
+    const post = await getPost(params.slug);
+    return <article>{post.title}</article>;
+}
+```
+
+**Behavior for slugs *not* returned by `generateStaticParams`** (a commonly tested nuance): by default, Next.js will still attempt to render them **on-demand** at request time (and can cache the result afterward, following ISR-like behavior) unless explicitly configured with `dynamicParams = false`, which would instead return a 404 for any slug not present in the pre-generated static set — worth knowing this configurable behavior exists, since it's a common point of confusion between "fully static, closed set" vs "statically pre-rendered common cases, with on-demand fallback for the rest."
+
+---
+
+## 14. Hydration
+
+*(Directly ties to the upcoming React guide's rendering model — the mechanism that makes server-rendered HTML interactive.)*
+
+**Hydration**: The process by which React "attaches" to server-rendered HTML already present in the DOM (from SSR/SSG/ISR) and makes it interactive — rather than discarding and re-rendering that HTML from scratch, React **reuses** the existing DOM nodes, attaching event listeners and internal state/reconciliation bookkeeping to them.
+
+**Hydration mismatch errors (a very commonly tested, frequently-encountered real-world bug category):** Occurs when the HTML React generates **during hydration on the client** doesn't exactly match the HTML that was **actually sent from the server** — common causes include using `Date.now()`/`Math.random()` directly in render output (different value on server vs client), browser-only APIs accessed during render (e.g., checking `window` without guarding for its absence during server rendering, since `window` doesn't exist on the server), or conditionally rendering different content based on something that differs between server and client environments (like `localStorage`, which only exists client-side). React detects the mismatch and either patches the DOM (with a console warning) or, in more severe cases, discards and fully client-re-renders the affected subtree — either way, a performance cost and a bug worth avoiding, not relying on as expected behavior.
+
+**Interview trap:** *"Why would a Next.js page render correctly but throw a hydration warning in the console?"* Because the initial server-rendered HTML differs from what the client would produce given the exact same initial props/state — a classic root cause is non-deterministic values computed during render (timestamps, random IDs) that differ between the server's render pass and the client's hydration pass; the fix is typically to defer such values to `useEffect` (guaranteed client-only, running after hydration) rather than computing them directly in the render body.
+
+---
+
+## 15. Environment Variables
+
+**`NEXT_PUBLIC_` prefix (a very commonly tested security-relevant convention):** Environment variables are **not** exposed to the browser by default (server-only, for secrets like database credentials/API keys) — **only** variables explicitly prefixed with `NEXT_PUBLIC_` are inlined into the client-side JavaScript bundle at build time, making them (and only them) accessible in browser-executed code.
+```
+DATABASE_URL=postgres://...          # server-only — NEVER accessible in the browser bundle
+NEXT_PUBLIC_ANALYTICS_ID=UA-12345    # inlined into client JS — visible to anyone inspecting the bundle
+```
+
+**Interview trap:** *"Is it safe to put an API secret in a `NEXT_PUBLIC_`-prefixed variable?"* No — **anything** with that prefix is compiled directly into the publicly-shipped client JavaScript bundle and is trivially visible to anyone inspecting the browser's network/source (ties directly to the Security guide's Secrets Management section) — genuine secrets must remain **unprefixed** and only ever be accessed from server-side code (Server Components, Route Handlers, Server Actions), never from a Client Component.
+
+---
+
+## 16. Deployment & Edge vs Node Runtime
+
+**Node.js Runtime**: The full, standard Node.js environment — supports the complete Node API surface (file system access, most npm packages, native modules) — the default runtime for most Server Components/Route Handlers unless explicitly configured otherwise.
+
+**Edge Runtime**: A deliberately lightweight, restricted JavaScript runtime (based on web-standard APIs rather than Node-specific APIs) designed to run at **edge locations** — geographically distributed points-of-presence close to users (directly ties to the Networking guide's CDN section) — offering very fast cold-start times and low latency, at the cost of **not** supporting the full Node.js API surface (no direct file-system access, limited native module compatibility).
+
+**When to choose Edge over Node (commonly asked to compare):**
+| | Node.js Runtime | Edge Runtime |
+|---|---|---|
+| API surface | Full Node.js | Restricted, web-standard APIs only |
+| Cold start | Slower | Very fast |
+| Geographic distribution | Typically a single (or few) region(s) | Runs at many edge locations, close to users globally |
+| Best for | Full application logic, complex DB queries, heavy npm-package dependencies | Lightweight, latency-sensitive logic — middleware (Section 11), simple redirects/rewrites/auth checks |
+
+**Vercel (the company behind Next.js) and deployment** — while Next.js can be **self-hosted** on any Node.js-capable server/container platform, Vercel's platform is purpose-built around Next.js's specific features (ISR, Edge Middleware, Server Actions, image optimization) with first-party, zero-config integration — worth knowing this relationship exists, though it's not a strict requirement to know deep platform-specific deployment details unless the role specifically involves it.
+
+---
+
+## 17. Rapid-Fire Interview Q&A
+
+**Q: What's the core difference between SSR and SSG?**
+SSR renders the page fresh on every single request (server load per request, always current data); SSG renders once at build time, serving the same static HTML to every visitor (minimal server load, but stale until the next rebuild).
+
+**Q: What problem does ISR solve that neither pure SSR nor pure SSG solves well?**
+It lets mostly-static content stay reasonably fresh (via background regeneration on an interval or on-demand trigger) without needing either the per-request cost of SSR or a full site rebuild/redeploy for every content change.
+
+**Q: What's the key benefit of React Server Components over traditional client-rendered components?**
+Their JavaScript is never shipped to the browser at all — reducing bundle size and enabling direct server-side data access (e.g., a database query) inside the component itself, with no separate API endpoint or client-side fetch needed.
+
+**Q: If you need a single interactive button on an otherwise static page, should the whole page become a Client Component?**
+No — extract just the interactive part into its own small `"use client"` component and keep the rest of the page as a Server Component, minimizing the actual JavaScript shipped to the browser.
+
+**Q: Why might a Next.js App Router page show stale data after the underlying database changes?**
+Due to Next.js's multi-layer caching (particularly the `fetch` Data Cache and the Full Route Cache) — unless the fetch is configured with `no-store`/a short `revalidate` interval, or explicitly invalidated via `revalidatePath`/`revalidateTag` after the mutation, previously cached data/HTML may continue being served.
+
+**Q: What's the security implication of a Server Action being callable from a Client Component?**
+It's effectively a public endpoint the moment it's referenced client-side — it must independently validate inputs and authorize the calling user inside the action itself, exactly like any traditional API endpoint.
+
+**Q: What causes a hydration mismatch error, and what's a common fix?**
+The server-rendered HTML differs from what the client produces during hydration — often from non-deterministic values (`Date.now()`, `Math.random()`) or browser-only API access computed directly during render; the fix is typically deferring such logic to `useEffect`, which only runs client-side, after hydration.
+
+**Q: Why is the `NEXT_PUBLIC_` prefix convention security-relevant?**
+Only variables with that prefix are inlined into the publicly shipped client bundle; anything without it stays server-only — genuine secrets must never use the `NEXT_PUBLIC_` prefix, since anything that does is visible to anyone inspecting the browser bundle.
+
+---
+
+## Suggested Study Approach
+1. Be able to define and contrast CSR/SSR/SSG/ISR fluently, each with a concrete real-world example of when you'd choose it — this is the single most foundational, most consistently asked Next.js question.
+2. Practice explaining the Server Component vs Client Component boundary, including the "why would you extract just this button" reasoning — the most distinctive App Router-specific concept, and a common live-discussion/whiteboard topic.
+3. Rehearse the four caching layers and be ready to diagnose a "stale data" scenario by naming the specific layer responsible and the fix — a very commonly asked practical debugging question.
+4. Pair this guide with the JavaScript guide (event loop, `async`/`await`, Promise combinators all apply directly to data-fetching patterns here) and the Security guide (Server Action authorization, `NEXT_PUBLIC_` secret exposure) — Next.js questions are frequently framed as an application of concepts from both.
+5. Since the React guide is coming next, keep in mind that Server/Client Components, hydration, and Suspense are ultimately **React** concepts that Next.js's App Router specifically adopts and builds infrastructure around — worth revisiting this file's Sections 5 and 14 once the React guide is complete, to solidify the connection.

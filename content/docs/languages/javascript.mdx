@@ -1,0 +1,663 @@
+---
+title: "JavaScript"
+description: "JavaScript-specific interview fundamentals: the event loop, closures, prototypal inheritance, this binding, async patterns, and modern ES6+ features — building on the language-a..."
+---
+JavaScript-specific interview fundamentals: the event loop, closures, prototypal inheritance, `this` binding, async patterns, and modern ES6+ features — building on the language-agnostic OOP guide, with contrasts to Python/Java where useful.
+
+---
+
+## Table of Contents
+1. [How JavaScript Runs (Engine, Runtime, Event Loop)](#1-how-javascript-runs-engine-runtime-event-loop)
+2. [The Call Stack, Web APIs, and Event Loop in Detail](#2-the-call-stack-web-apis-and-event-loop-in-detail)
+3. [`var` vs `let` vs `const`](#3-var-vs-let-vs-const)
+4. [Hoisting](#4-hoisting)
+5. [Closures](#5-closures)
+6. [`this` Keyword](#6-this-keyword)
+7. [`call`, `apply`, `bind`](#7-call-apply-bind)
+8. [Prototypal Inheritance](#8-prototypal-inheritance)
+9. [ES6 Classes](#9-es6-classes)
+10. [Equality: `==` vs `===`](#10-equality--vs-)
+11. [Type Coercion](#11-type-coercion)
+12. [Truthy & Falsy Values](#12-truthy--falsy-values)
+13. [Promises](#13-promises)
+14. [`async`/`await`](#14-asyncawait)
+15. [Higher-Order Functions & Array Methods](#15-higher-order-functions--array-methods)
+16. [Destructuring, Spread, Rest](#16-destructuring-spread-rest)
+17. [Modules (ESM vs CommonJS)](#17-modules-esm-vs-commonjs)
+18. [Debounce & Throttle](#18-debounce--throttle)
+19. [Memory Management & Closures Leaks](#19-memory-management--closures-leaks)
+20. [Event Delegation & the DOM Event Model](#20-event-delegation--the-dom-event-model)
+21. [Rapid-Fire Interview Q&A](#21-rapid-fire-interview-qa)
+
+---
+
+## 1. How JavaScript Runs (Engine, Runtime, Event Loop)
+
+**JavaScript Engine** (e.g., V8 in Chrome/Node.js, SpiderMonkey in Firefox): Parses and executes JavaScript code — compiles it to bytecode and, for hot code paths, further **JIT-compiles** to optimized machine code (a similar hybrid interpretation+JIT model to the JVM discussed in the Java guide, Section 2).
+
+**JavaScript Runtime**: The engine **plus** the surrounding environment's APIs — in a browser, this includes the DOM, `fetch`, `setTimeout`, etc. (Web APIs); in Node.js, this includes the file system, `http` module, and other Node-specific APIs. Critically, these environment APIs are **not part of the JavaScript language itself** (not part of the ECMAScript spec) — they're provided by the host environment.
+
+**Single-threaded, but non-blocking (the single most defining, most commonly asked characteristic of JavaScript):** JavaScript itself executes on a **single thread** with a single **call stack** — only one operation can run at any instant. Yet JavaScript achieves **asynchronous, non-blocking behavior** (handling network requests, timers, user input without freezing) via the **event loop**, which coordinates the call stack with the runtime's separate mechanisms for handling asynchronous operations (Section 2) — this is the foundational concept nearly every JS-specific interview question ultimately traces back to.
+
+---
+
+## 2. The Call Stack, Web APIs, and Event Loop in Detail
+
+**The Call Stack:** Tracks function calls in a LIFO structure (directly mirrors the general Stack data structure from the DSA guide, and the function-call-stack concept from the C/C++ guide's memory layout section) — when a function is called, a frame is pushed; when it returns, the frame is popped. If synchronous code runs too long, it **blocks** the entire thread (nothing else — rendering, other event handlers, timers — can run until the stack clears), the root cause of a "frozen"/unresponsive page or server.
+
+**Web APIs / Node APIs (not part of the JS engine itself):** When you call an asynchronous function like `setTimeout`, `fetch`, or a DOM event listener, the actual **waiting** happens outside the JS engine, in the runtime environment (browser or Node) — the JS engine's call stack is immediately freed to continue executing other code while the environment handles the timer/network request/event listening in the background.
+
+**Callback Queue (Macrotask Queue) & Microtask Queue (commonly asked to distinguish, since ordering questions are a classic trap):** Once an async operation (e.g., a `setTimeout` timer, a completed `fetch`) finishes, its associated callback is placed into a queue — **not executed immediately** — waiting for the call stack to be completely empty. There are actually **two** such queues, processed with different priority:
+- **Microtask Queue**: Promise callbacks (`.then`/`.catch`/`.finally`), `async`/`await` continuations, `queueMicrotask()`.
+- **Macrotask (Callback/Task) Queue**: `setTimeout`, `setInterval`, DOM events, I/O callbacks (Node.js).
+
+**The Event Loop's job:** Continuously checks — "is the call stack empty?" If yes, it first drains the **entire microtask queue** (running every pending microtask, including any *new* microtasks queued while draining) **before** processing even a single macrotask — this priority ordering is the source of a very commonly tested "predict the output" question.
+
+```javascript
+console.log("1");                          // synchronous — runs immediately
+
+setTimeout(() => console.log("2"), 0);      // macrotask — queued, even with 0ms delay
+
+Promise.resolve().then(() => console.log("3")); // microtask — queued
+
+console.log("4");                           // synchronous — runs immediately
+
+// Output: 1, 4, 3, 2
+// Sync code runs first (1, 4) → call stack empties → microtask queue fully drained (3) → THEN the macrotask queue's setTimeout callback runs (2)
+```
+
+**Interview trap:** *"Does `setTimeout(fn, 0)` run immediately?"* No — even with a 0ms delay, it's still placed on the **macrotask queue**, which is only processed **after** the call stack is empty **and** the entire microtask queue has been drained — meaning any pending Promise `.then()` callbacks will always run before a `setTimeout(fn, 0)` callback, regardless of declaration order, as shown above.
+
+---
+
+## 3. `var` vs `let` vs `const`
+
+| | `var` | `let` | `const` |
+|---|---|---|---|
+| Scope | **Function-scoped** | **Block-scoped** | **Block-scoped** |
+| Hoisting behavior | Hoisted and initialized to `undefined` | Hoisted, but **not** initialized — in the "Temporal Dead Zone" until the declaration line (Section 4) | Same as `let` |
+| Re-declaration | Allowed (no error) | Not allowed in the same scope (`SyntaxError`) | Not allowed |
+| Re-assignment | Allowed | Allowed | **Not allowed** — but see the mutable-object nuance below |
+| Attaches to `window`/global object (browser, top-level) | Yes | No | No |
+
+```javascript
+function example() {
+    if (true) {
+        var x = 1;   // function-scoped — leaks out of the if-block
+        let y = 2;   // block-scoped — confined to this { } block
+    }
+    console.log(x);  // 1 — accessible
+    // console.log(y); // ReferenceError — y is not defined out here
+}
+```
+
+**`const` doesn't mean "immutable" — a very commonly tested nuance:** `const` only prevents **reassignment** of the variable binding itself — for objects/arrays, the **contents** can still be freely mutated (directly parallels the C++ guide's `int *const p2` discussion, and the general Immutability concept from the OOP guide — the "pointer"/binding is fixed, but what it points to isn't automatically frozen).
+```javascript
+const arr = [1, 2, 3];
+arr.push(4);      // fine — mutating the array's CONTENTS, not reassigning the binding
+// arr = [5, 6];  // TypeError — cannot reassign a const binding
+
+// To truly prevent mutation, use Object.freeze() (shallow freeze only, worth noting):
+const frozen = Object.freeze({ x: 1 });
+frozen.x = 99;  // silently fails in non-strict mode, throws in strict mode — x remains 1
+```
+
+**Modern best practice (commonly asked "which should you default to"):** Use `const` by default; use `let` only when reassignment is genuinely needed; avoid `var` entirely in modern code — its function-scoping and hoisting-without-TDZ behavior are widely considered a legacy design flaw that `let`/`const` (ES6+) were specifically introduced to fix.
+
+---
+
+## 4. Hoisting
+
+JavaScript's behavior of moving **declarations** (not initializations/assignments) to the top of their containing scope during the compilation phase, before the code actually executes.
+
+```javascript
+console.log(a); // undefined — NOT a ReferenceError! The declaration 'var a' is hoisted, but not the assignment
+var a = 5;
+
+console.log(b); // ReferenceError: Cannot access 'b' before initialization — the Temporal Dead Zone
+let b = 10;
+```
+
+**Temporal Dead Zone (TDZ) — a very commonly asked concept:** `let`/`const` declarations **are** technically hoisted (the engine is aware of them from the top of the block), but they remain **uninitialized** and inaccessible from the start of the block until the actual declaration line executes — accessing them in this window (the TDZ) throws a `ReferenceError`, rather than silently returning `undefined` like hoisted `var` does. This is a deliberate safety improvement — it converts what would otherwise be a silent `undefined`-related bug (with `var`) into an immediate, loud error.
+
+**Function hoisting nuance (commonly asked to distinguish two syntaxes):**
+```javascript
+sayHi(); // "Hi!" — works, because FUNCTION DECLARATIONS are hoisted with their full body/definition
+function sayHi() { console.log("Hi!"); }
+
+sayBye(); // TypeError: sayBye is not a function — 'sayBye' variable is hoisted (as undefined), but the FUNCTION EXPRESSION assignment hasn't run yet
+var sayBye = function() { console.log("Bye!"); };
+```
+**Function declarations** (`function foo() {}`) are hoisted **entirely**, including their body — callable before their textual position in the code. **Function expressions** (`var foo = function() {}`) are only hoisted as far as the variable declaration itself (subject to the same `var`/`let`/`const` hoisting rules as any other variable) — the function body/assignment isn't available until that line actually executes.
+
+---
+
+## 5. Closures
+
+*(Directly parallels the Python guide's Closures section — the exact same underlying concept, JavaScript's specific syntax/idioms here.)*
+
+A function that **retains access to variables from its enclosing (outer) scope**, even after the outer function has finished executing and returned — one of the most foundational and most frequently tested JavaScript concepts, underlying module patterns, callbacks, and much of idiomatic JS.
+
+```javascript
+function makeCounter() {
+    let count = 0;               // this variable is "closed over"
+    return function() {
+        count++;                  // still accessible, even after makeCounter() has returned
+        return count;
+    };
+}
+
+const counter = makeCounter();
+console.log(counter()); // 1
+console.log(counter()); // 2 — 'count' persisted between calls, private to this specific counter instance
+```
+
+**Practical uses of closures (commonly asked to name):**
+- **Data privacy/encapsulation** (a common pre-ES6-class pattern for achieving "private" variables, ties to the OOP guide's Encapsulation section — before JavaScript had true private class fields, Section 9): the enclosing function's local variables are inaccessible from outside except through the returned closure's own controlled interface.
+- **Callbacks/event handlers**: retaining context/configuration from when they were created, for use whenever they're eventually invoked.
+- **Currying/partial application**: functions that return specialized versions of themselves with some arguments already "locked in."
+- **The Module Pattern**: an IIFE (Immediately Invoked Function Expression) returning an object, exposing only a deliberate public API while keeping implementation details private via closure — historically JavaScript's primary module/namespacing mechanism before ES6 modules (Section 17) existed.
+
+**The classic "closures in a loop with `var`" trap (extremely commonly tested, directly parallel to the Python guide's identical pitfall):**
+```javascript
+for (var i = 0; i < 3; i++) {
+    setTimeout(() => console.log(i), 100);
+}
+// Output: 3, 3, 3 — NOT 0, 1, 2! Because 'var' is function-scoped, all three closures share the SAME 'i',
+// which has already reached 3 by the time the setTimeout callbacks actually run
+
+// THE FIX — use 'let' instead, which creates a NEW binding of 'i' for EACH loop iteration:
+for (let i = 0; i < 3; i++) {
+    setTimeout(() => console.log(i), 100);
+}
+// Output: 0, 1, 2 — correct
+```
+**Interview trap:** *"Why does `let` fix the loop-closure problem but `var` doesn't?"* `let` is **block-scoped**, and critically, the JS engine creates a **fresh binding of the loop variable for each iteration** of a `let`-based `for` loop specifically — each closure created in the loop body captures its *own* iteration's independent `i`, whereas `var`'s single function-scoped variable is shared and mutated in place across all iterations, so every closure ends up referencing the same final value.
+
+---
+
+## 6. `this` Keyword
+
+One of JavaScript's most frequently misunderstood and most commonly tested concepts — unlike most OOP languages (where `this`/`self` is always bound to the instance a method was called on), JavaScript's `this` is determined by **how a function is called** (its "call site"), not where it's defined — with several distinct binding rules.
+
+**The four (traditional) binding rules, in order of precedence (commonly asked to enumerate):**
+
+1. **Default binding**: A plain function call (`foo()`) — `this` is `undefined` in strict mode (or the global object, `window`/`global`, in non-strict/"sloppy" mode).
+2. **Implicit binding**: Called as a method on an object (`obj.foo()`) — `this` is the object the method was called **on** (`obj`), regardless of where the function was originally defined.
+3. **Explicit binding**: Using `.call()`, `.apply()`, or `.bind()` (Section 7) — `this` is explicitly whatever object you specify.
+4. **`new` binding**: Called with the `new` keyword — `this` is the newly created object instance.
+
+```javascript
+const obj = {
+    name: "Alice",
+    greet() { console.log(this.name); }
+};
+obj.greet();  // "Alice" — implicit binding, 'this' is 'obj'
+
+const detached = obj.greet;
+detached();   // undefined (strict mode) — DEFAULT binding! 'this' context is LOST once detached from 'obj'
+```
+
+**Interview trap — the classic "losing `this`" bug (extremely commonly asked, especially around callbacks):** Passing a method as a callback (e.g., to `setTimeout`, an event listener, or `.map()`) **detaches** it from its original object — the function itself doesn't "remember" what object it was a method of; `this` is determined fresh at each call, based purely on the call site.
+```javascript
+class Timer {
+    constructor() { this.seconds = 0; }
+    increment() { this.seconds++; console.log(this.seconds); }
+}
+const timer = new Timer();
+setTimeout(timer.increment, 1000); // BUG — 'increment' is called as a plain function, 'this' is undefined/global, NOT 'timer'
+// TypeError: Cannot read properties of undefined (reading 'seconds')
+```
+
+**Arrow functions and `this` (the modern, most common fix — a critical distinguishing feature of arrow functions, commonly asked):** Arrow functions **do not have their own `this` binding** — they **lexically inherit** `this` from their enclosing (surrounding) scope at the time they're **defined**, exactly like closures capture variables (Section 5) — never re-bound based on how the arrow function is later called.
+```javascript
+class Timer {
+    constructor() { this.seconds = 0; }
+    increment = () => {                  // arrow function — 'this' is lexically bound to the Timer INSTANCE at definition
+        this.seconds++;
+        console.log(this.seconds);
+    }
+}
+const timer = new Timer();
+setTimeout(timer.increment, 1000); // WORKS correctly — arrow function's 'this' was fixed at class-instantiation time
+```
+
+**Regular function vs arrow function `this` (the single most important, most commonly asked distinguishing fact between the two):**
+| | Regular `function` | Arrow function `=>` |
+|---|---|---|
+| `this` binding | **Dynamic** — determined by how it's called (call site) | **Lexical** — inherited from the enclosing scope at definition time, fixed forever |
+| Has its own `arguments` object | Yes | No — inherits from enclosing scope if needed |
+| Can be used as a constructor (`new`) | Yes | **No** — throws a `TypeError` |
+| Suitable for object methods needing dynamic `this` | Yes | Generally no (would capture the wrong `this` from the surrounding scope, not the object) |
+| Suitable for callbacks needing the enclosing `this` | Requires manual binding (`.bind()`, or an intermediate `const self = this`) | Naturally correct, no extra binding needed |
+
+---
+
+## 7. `call`, `apply`, `bind`
+
+Three methods (available on all functions) for explicitly controlling what `this` refers to when a function is invoked — the "explicit binding" rule from Section 6.
+
+```javascript
+function greet(greeting) { console.log(`${greeting}, ${this.name}`); }
+const person = { name: "Alice" };
+
+greet.call(person, "Hello");           // "Hello, Alice" — invokes IMMEDIATELY, args passed individually
+greet.apply(person, ["Hello"]);        // "Hello, Alice" — invokes IMMEDIATELY, args passed as an ARRAY
+
+const boundGreet = greet.bind(person); // does NOT invoke immediately — returns a NEW function with 'this' permanently bound
+boundGreet("Hi");                      // "Hi, Alice" — can be called later, 'this' is locked to 'person' forever
+```
+
+**`call` vs `apply` (commonly asked, a simple but frequently tested distinction):** Functionally identical **except** for how additional arguments are passed — `call` takes them as individual, comma-separated arguments; `apply` takes them as a single array. (A useful mnemonic: "**A**pply takes an **A**rray.")
+
+**`bind` (the most distinctive of the three):** Unlike `call`/`apply` (which invoke the function immediately), `bind` **returns a new function** with `this` permanently fixed — the classic pre-arrow-function solution to the "losing `this`" problem from Section 6 (e.g., `setTimeout(timer.increment.bind(timer), 1000)` would also correctly fix that earlier bug).
+
+---
+
+## 8. Prototypal Inheritance
+
+*(A fundamentally different inheritance model from the class-based inheritance covered in the OOP guide, Java guide, and C++ guide — commonly asked to explain how it differs.)*
+
+JavaScript objects don't inherit from **classes** in the traditional sense — every object has an internal link (`[[Prototype]]`, accessible via `Object.getPrototypeOf()` or the non-standard-but-widely-supported `__proto__`) to another object, its **prototype** — and property/method lookups **walk up this prototype chain** until found (or until reaching `null` at the chain's end).
+
+```javascript
+const animal = {
+    eat() { console.log(`${this.name} is eating`); }
+};
+const dog = Object.create(animal);  // dog's prototype is set to 'animal'
+dog.name = "Rex";
+dog.eat(); // "Rex is eating" — 'eat' isn't dog's OWN property, found by walking up the prototype chain to 'animal'
+```
+
+**Prototype chain lookup (commonly asked to explain the mechanism):** When you access `obj.property`, JavaScript first checks if `obj` has that property **directly** (an "own property"); if not, it checks `obj`'s prototype, then that prototype's prototype, and so on, until the property is found or the chain ends at `Object.prototype`'s own prototype, which is `null`.
+
+**Functions and `.prototype` (a commonly confused distinction — every function has an automatic `.prototype` property, distinct from the function's own `[[Prototype]]`):** When a function is used as a **constructor** (called with `new`), the newly created object's internal `[[Prototype]]` is set to the constructor function's `.prototype` property — this is the pre-ES6 mechanism for implementing "classical-style" inheritance in JavaScript, which ES6 `class` syntax (Section 9) is ultimately just cleaner **syntax sugar** over.
+```javascript
+function Animal(name) { this.name = name; }
+Animal.prototype.eat = function() { console.log(`${this.name} is eating`); };
+
+const dog = new Animal("Rex"); // dog's [[Prototype]] is set to Animal.prototype
+dog.eat(); // found via the prototype chain, same mechanism as Object.create above
+```
+
+**Interview trap:** *"Is JavaScript's `class` syntax 'real' classes like Java's?"* No — it's **syntactic sugar** over the exact same underlying prototypal inheritance mechanism described above; under the hood, `class Dog extends Animal` still ultimately sets up a prototype chain, just with cleaner, more familiar syntax — JavaScript remains a prototype-based language at its core, unlike Java/C++'s genuinely class-based object model.
+
+---
+
+## 9. ES6 Classes
+
+Modern, cleaner syntax (ES6/2015+) for the same prototypal inheritance mechanism described in Section 8 — the now strongly preferred way to write JS "class"-style code, even though it compiles down to prototypes under the hood.
+
+```javascript
+class Animal {
+    #secret = "hidden";  // true PRIVATE field (ES2022+) — genuinely inaccessible from outside, unlike closures' convention-based privacy
+
+    constructor(name) { this.name = name; }
+    eat() { console.log(`${this.name} is eating`); }
+    static create(name) { return new Animal(name); }  // static method — mirrors the OOP/Java guides' discussion
+    get description() { return `Animal: ${this.name}`; }  // getter — accessed like a property, no parentheses
+}
+
+class Dog extends Animal {
+    constructor(name, breed) {
+        super(name);  // MUST call super() before using 'this' in a derived class constructor
+        this.breed = breed;
+    }
+    eat() {           // overriding — direct analog of the OOP guide's polymorphism/overriding discussion
+        super.eat();   // call the parent's version too
+        console.log(`${this.name} the ${this.breed} wags its tail`);
+    }
+}
+
+const rex = new Dog("Rex", "Labrador");
+rex.eat();
+```
+
+**Private fields (`#field`, ES2022+, commonly asked since it's a genuine language-level privacy mechanism, unlike the underscore convention discussed in the Python guide):** Truly inaccessible from outside the class — attempting `rex.#secret` from external code is a `SyntaxError`, not merely a convention violation — a meaningful improvement over the closure-based or underscore-naming "privacy" patterns JavaScript relied on before this feature existed.
+
+**`super()` must be called before `this` in a derived class constructor (a commonly tested, strictly enforced rule):** Unlike base classes, a derived class's constructor has **no** `this` binding until `super()` executes (since `super()` is what actually creates/initializes the object via the parent constructor) — attempting to reference `this` before calling `super()` throws a `ReferenceError`.
+
+---
+
+## 10. Equality: `==` vs `===`
+
+**`===` (strict equality)**: Compares both **value and type**, with **no** type coercion — if the operands are different types, it's immediately `false`.
+
+**`==` (loose/abstract equality)**: Performs **type coercion** (Section 11) before comparing, if the operand types differ — attempting to convert one or both operands to a common type first.
+
+```javascript
+console.log(1 === "1");   // false — different types (number vs string), no coercion attempted
+console.log(1 == "1");    // true — "1" is coerced to the number 1 before comparing
+
+console.log(null === undefined); // false — different types
+console.log(null == undefined);  // true — a SPECIAL CASE in the coercion rules: null and undefined are loosely equal ONLY to each other
+
+console.log(0 == false);   // true — false is coerced to 0
+console.log("" == false);  // true — both coerce to 0 in the comparison
+console.log([] == false);  // true — [] coerces to "" which coerces to 0
+```
+
+**Interview trap / universally cited best practice:** Always use `===` (and `!==`) by default — `==`'s coercion rules are notoriously unintuitive and a common source of subtle bugs (as the `[] == false` example above illustrates); `==` is really only ever intentionally useful for the specific `null == undefined` special case, and even that's usually better expressed explicitly (`x === null || x === undefined`, or the modern nullish coalescing operator, `??`).
+
+---
+
+## 11. Type Coercion
+
+JavaScript is **dynamically and weakly typed** — operators can implicitly convert operands between types, sometimes in surprising ways, a frequent source of "predict the output" interview trivia.
+
+```javascript
+console.log(1 + "1");     // "11" — the '+' operator triggers STRING coercion when either operand is a string
+console.log("5" - 1);     // 4 — the '-' operator triggers NUMERIC coercion (only '+' has this string-concatenation special case)
+console.log("5" * "2");   // 10 — both coerced to numbers
+console.log(1 + true);    // 2 — true coerces to 1
+console.log(1 + null);    // 1 — null coerces to 0
+console.log(1 + undefined); // NaN — undefined coerces to NaN, and NaN poisons any arithmetic it touches
+console.log([] + []);     // "" — both arrays coerce to "" (empty string) via their toString(), then concatenated
+console.log([] + {});     // "[object Object]" — [] coerces to "", {} coerces to its default string representation
+```
+
+**Why `+` behaves differently from other arithmetic operators (a commonly asked "why" question):** `+` is **overloaded** to mean both numeric addition and string concatenation — if **either** operand is a string (or coerces to one first, following a specific "ToPrimitive" algorithm the spec defines), `+` performs string concatenation; all other arithmetic operators (`-`, `*`, `/`) have no such string meaning, so they always coerce both operands toward numbers.
+
+**Best practice (commonly asked to recommend):** Prefer explicit conversion (`String(x)`, `Number(x)`, `Boolean(x)`, or the `+x`/`x+""`/`!!x` shorthand idioms, used deliberately) over relying on implicit coercion — makes intent clear and avoids exactly this class of surprising-output bugs.
+
+---
+
+## 12. Truthy & Falsy Values
+
+Every JavaScript value is either **truthy** or **falsy** when evaluated in a boolean context (e.g., an `if` condition) — commonly asked to enumerate the **complete, short list of falsy values**, since everything else is truthy.
+
+**The complete list of falsy values (memorize this — it's short and exhaustive):**
+```
+false, 0, -0, 0n (BigInt zero), "" (empty string), null, undefined, NaN
+```
+**Everything else is truthy** — including, famously and counter-intuitively, `"0"` (a non-empty string), `[]` (an empty array), and `{}` (an empty object) — all objects (including empty ones) are always truthy, a very commonly tested surprising fact.
+```javascript
+if ([]) console.log("truthy!");   // runs — [] is truthy, even though it's "empty"
+if ("0") console.log("truthy!");  // runs — "0" is a non-empty string, hence truthy (contrast with the actual number 0, which IS falsy)
+```
+
+**Nullish Coalescing (`??`, ES2020) vs Logical OR (`||`) — a commonly asked comparison, since both are used for "default value" patterns:**
+```javascript
+const count = 0;
+console.log(count || 10);  // 10 — WRONG if 0 is a valid, intentional value! || treats 0 as falsy, falls through to the default
+console.log(count ?? 10);  // 0  — CORRECT — ?? only falls through on null/undefined specifically, not on other falsy values like 0 or ""
+```
+**Interview trap:** *"When would `||` give the wrong default value?"* Whenever the **intended** valid value is itself falsy but not `null`/`undefined` (e.g., `0`, `""`, `false`) — `||` would incorrectly treat that legitimate value as "missing" and substitute the default; `??` correctly distinguishes "genuinely absent" (`null`/`undefined`) from "present but falsy," which is almost always the actually intended semantics for default-value patterns.
+
+---
+
+## 13. Promises
+
+An object representing the **eventual completion (or failure)** of an asynchronous operation — JavaScript's structured alternative to raw callback-based async code (avoiding deeply nested "callback hell").
+
+**Three states (commonly asked to name):** **Pending** (initial, neither fulfilled nor rejected), **Fulfilled** (operation completed successfully), **Rejected** (operation failed). A Promise can only transition from pending to one of the other two states **once** — never back, and never between fulfilled/rejected.
+
+```javascript
+function fetchData() {
+    return new Promise((resolve, reject) => {
+        setTimeout(() => {
+            const success = true;
+            if (success) resolve("data");
+            else reject(new Error("failed"));
+        }, 1000);
+    });
+}
+
+fetchData()
+    .then(data => console.log(data))       // runs on fulfillment
+    .catch(err => console.error(err))      // runs on rejection (from the promise itself, or any prior .then())
+    .finally(() => console.log("done"));   // always runs, regardless of outcome
+```
+
+**Promise combinators (commonly asked to compare — four distinct "run multiple promises together" strategies):**
+- **`Promise.all(promises)`**: Waits for **all** to fulfill; **rejects immediately** if **any single one** rejects (fail-fast) — resolves with an array of all results, in the original order.
+- **`Promise.allSettled(promises)`**: Waits for **all** to settle (either fulfilled or rejected), **never** short-circuits — resolves with an array of `{status, value/reason}` objects describing each outcome, useful when you need every result regardless of individual failures.
+- **`Promise.race(promises)`**: Settles as soon as the **first** promise settles (whether fulfilled or rejected) — useful for timeout patterns (racing a real operation against a timer promise).
+- **`Promise.any(promises)`**: Settles as soon as the **first** promise **fulfills** (ignoring rejections, unless **all** reject, in which case it rejects with an `AggregateError`) — the fulfillment-focused counterpart to `race`.
+
+**Interview trap:** *"What's the difference between `Promise.all` and `Promise.allSettled`?"* `all` fails fast — a single rejection immediately rejects the whole combined promise, discarding the other results; `allSettled` **always** waits for every promise to finish and reports every individual outcome, making it the right choice when partial failures among a batch of independent operations are acceptable and you need visibility into which ones succeeded/failed.
+
+---
+
+## 14. `async`/`await`
+
+Syntactic sugar (ES2017) over Promises, allowing asynchronous code to be written and read in a more synchronous-looking, linear style — while still being fully non-blocking under the hood.
+
+```javascript
+async function getData() {           // 'async' makes this function ALWAYS return a Promise
+    try {
+        const response = await fetch("https://api.example.com/data"); // pauses here, yielding control, WITHOUT blocking the thread
+        const data = await response.json();
+        return data;
+    } catch (err) {                   // catches rejections from ANY awaited promise in the try block — replaces .catch() chaining
+        console.error("Failed:", err);
+    }
+}
+```
+
+**What `await` actually does (commonly asked to explain precisely, ties directly to Section 2's event loop discussion):** `await` pauses the **async function's own execution** at that point (not the entire thread/program) — control returns to the event loop, which is free to process other work (other code, other events) while the awaited promise is pending; once the promise settles, the async function's execution **resumes** exactly where it left off, as a **microtask** (Section 2).
+
+**`async` functions always return a Promise (a commonly tested fact):** Even if you `return` a plain, non-Promise value from an `async` function, it's automatically wrapped in a resolved Promise — meaning `getData()` above must always be consumed with `.then()` or another `await`, never used as if it directly returns the raw value synchronously.
+
+**Sequential vs concurrent `await` — a very commonly tested performance gotcha:**
+```javascript
+// SLOW — sequential: each await fully waits before the next one even STARTS (total time = sum of all three)
+async function sequential() {
+    const a = await fetchA(); // waits here...
+    const b = await fetchB(); // ...then waits here...
+    const c = await fetchC(); // ...then waits here — needlessly serial if these are independent!
+}
+
+// FAST — concurrent: all three start immediately, THEN wait together (total time = the SLOWEST single one)
+async function concurrent() {
+    const [a, b, c] = await Promise.all([fetchA(), fetchB(), fetchC()]);
+}
+```
+**Interview trap:** *"When would you await sequentially vs use `Promise.all`?"* Sequentially, only when each operation genuinely **depends** on the previous one's result; when operations are **independent**, always prefer kicking them off concurrently (`Promise.all`, or start the promises first and `await` them afterward) — a very commonly missed real-world performance optimization, since naively `await`-ing everything one line at a time (even when unnecessary) is an easy default trap to fall into.
+
+---
+
+## 15. Higher-Order Functions & Array Methods
+
+*(Functions as first-class values — directly parallels the Python guide's Section 7 — enabling functions to be passed as arguments or returned from other functions, the basis for JS's extensive array-method toolkit.)*
+
+```javascript
+const nums = [1, 2, 3, 4, 5];
+
+nums.map(x => x * 2);                    // [2, 4, 6, 8, 10] — transforms EVERY element, returns a NEW array of the same length
+nums.filter(x => x % 2 === 0);            // [2, 4] — keeps only elements passing the predicate
+nums.reduce((acc, x) => acc + x, 0);      // 15 — folds the array down to a single accumulated value
+nums.forEach(x => console.log(x));        // no return value — purely for side effects, unlike map
+nums.find(x => x > 3);                    // 4 — first element satisfying the predicate, or undefined
+nums.some(x => x > 4);                    // true — at least one element satisfies the predicate
+nums.every(x => x > 0);                   // true — ALL elements satisfy the predicate
+```
+
+**`map` vs `forEach` (a commonly asked distinction, since both iterate but serve different purposes):** `map` **returns a new array** built from the callback's return values (intended for transformation, should be free of side effects ideally); `forEach` returns `undefined` and is used purely for **side effects** (e.g., logging, mutating external state) — using `map` when you don't actually use its return value (i.e., using it like `forEach`) is a commonly cited code-smell/anti-pattern.
+
+**`reduce` — the most general/powerful of the array methods (commonly asked to demonstrate its versatility, since `map`/`filter` can both technically be implemented in terms of `reduce`):**
+```javascript
+// map, implemented via reduce
+const doubled = nums.reduce((acc, x) => [...acc, x * 2], []);
+// filter, implemented via reduce
+const evens = nums.reduce((acc, x) => x % 2 === 0 ? [...acc, x] : acc, []);
+```
+
+---
+
+## 16. Destructuring, Spread, Rest
+
+**Destructuring** — extracting values from arrays/objects into distinct variables concisely:
+```javascript
+const [first, second, ...rest] = [1, 2, 3, 4, 5];  // first=1, second=2, rest=[3,4,5]
+const { name, age = 30 } = { name: "Alice" };       // name="Alice", age=30 (default value, since 'age' wasn't present)
+const { a: renamedA } = { a: 1 };                   // renamedA=1 — renaming during destructuring
+```
+
+**Spread operator (`...`) — expanding an iterable into individual elements:**
+```javascript
+const arr1 = [1, 2, 3];
+const arr2 = [...arr1, 4, 5];       // [1, 2, 3, 4, 5] — a NEW array, shallow copy + additions (avoids mutating arr1)
+const merged = { ...obj1, ...obj2 }; // shallow-merges two objects (later properties override earlier ones on key conflict)
+```
+
+**Rest parameter (`...`) — the same syntax, opposite direction, collecting multiple arguments into an array (directly parallel to Python's `*args`, JS's syntax mirrors it closely):**
+```javascript
+function sum(...numbers) {           // collects ALL arguments into a single array named 'numbers'
+    return numbers.reduce((a, b) => a + b, 0);
+}
+sum(1, 2, 3, 4); // 10
+```
+
+**Interview trap — spread creates only a SHALLOW copy (a commonly tested gotcha, directly parallel to Python's shallow-vs-deep-copy discussion in the DSA guide's Prototype pattern section):**
+```javascript
+const original = { a: 1, nested: { b: 2 } };
+const copy = { ...original };
+copy.a = 99;              // fine — doesn't affect original.a, since 'a' itself was copied by value
+copy.nested.b = 99;       // ALSO affects original.nested.b! 'nested' is an OBJECT REFERENCE, only the reference itself was copied, not the nested object's contents
+```
+
+---
+
+## 17. Modules (ESM vs CommonJS)
+
+**CommonJS (CJS)** — Node.js's original, synchronous module system:
+```javascript
+// exporting
+module.exports = { add, subtract };
+// importing
+const { add, subtract } = require("./math");
+```
+
+**ES Modules (ESM)** — the standardized, modern JavaScript module system (now natively supported by browsers and current Node.js):
+```javascript
+// exporting
+export function add(a, b) { return a + b; }
+export default function multiply(a, b) { return a * b; }
+// importing
+import multiply, { add } from "./math.js";
+```
+
+**Key differences (commonly asked to compare):**
+| | CommonJS | ES Modules |
+|---|---|---|
+| Loading | **Synchronous** (`require()` blocks until the module is loaded) | Supports both static (compile-time-analyzable) and **asynchronous** dynamic (`import()`) loading |
+| Export binding | Copies the exported **value** at the time of export (a snapshot) | Exports **live bindings** — importing code sees updates if the exporting module later reassigns the exported value |
+| Analyzability | Dynamic (`require` can be called conditionally/anywhere) — harder for tools to statically analyze | Static structure (imports/exports must appear at the top level) — enables **tree-shaking** (bundlers can determine and eliminate unused exports at build time) |
+| Default environment | Node.js (historically) | Browsers (natively) and modern Node.js (via `.mjs` or `"type": "module"` in `package.json`) |
+
+**Interview trap:** *"Why can ES Modules support tree-shaking but CommonJS generally can't?"* Because ESM's `import`/`export` statements must be **static** (fixed, top-level, not inside conditionals or computed dynamically) — a bundler can therefore analyze the complete dependency/usage graph **without executing any code**, at build time, and safely strip out unused exports; CommonJS's `require()` can be called conditionally or with a dynamically computed path, making it fundamentally impossible to statically guarantee what's actually used ahead of time.
+
+---
+
+## 18. Debounce & Throttle
+
+Two closely related, commonly asked-to-implement-from-scratch patterns for controlling how often a function (typically an event handler) executes in response to rapidly-firing events (e.g., window resize, scroll, keystroke input).
+
+**Debounce**: Delays invoking the function until **after** a specified quiet period has passed **since the last time it was invoked** — if the event keeps firing, the timer keeps resetting, so the function only actually runs once things have "settled down."
+```javascript
+function debounce(fn, delay) {
+    let timeoutId;
+    return function (...args) {
+        clearTimeout(timeoutId);                          // cancel any pending previous invocation
+        timeoutId = setTimeout(() => fn.apply(this, args), delay); // reschedule
+    };
+}
+// Use case: search-as-you-type — only fire the actual API call once the user pauses typing
+const debouncedSearch = debounce(searchAPI, 300);
+```
+
+**Throttle**: Ensures the function runs **at most once** per specified time interval, **regardless** of how many times the event fires within that window — guarantees a steady, capped execution rate rather than waiting for a quiet period.
+```javascript
+function throttle(fn, limit) {
+    let inThrottle = false;
+    return function (...args) {
+        if (!inThrottle) {
+            fn.apply(this, args);
+            inThrottle = true;
+            setTimeout(() => inThrottle = false, limit);
+        }
+    };
+}
+// Use case: scroll event handler — update UI at most every 200ms, even if 'scroll' fires dozens of times per second
+const throttledScroll = throttle(updatePosition, 200);
+```
+
+**Debounce vs Throttle (the key distinguishing question, very commonly asked):** Debounce waits for a **pause** in activity before running (good for "wait until the user is done" scenarios — search input, form validation, window-resize-finished handlers); Throttle guarantees **regular, capped-rate execution throughout continuous activity** (good for "keep responding periodically while it's happening" scenarios — scroll position tracking, mouse-move-based drag handling, rate-limiting button clicks).
+
+---
+
+## 19. Memory Management & Closures Leaks
+
+JavaScript engines use **garbage collection** (primarily **mark-and-sweep**, conceptually similar to the reachability-based tracing discussed in the Java guide's GC section, rather than reference counting) — an object is eligible for collection once it's no longer **reachable** from any GC root (global objects, currently executing function scopes).
+
+**Common memory leak patterns in JS (commonly asked to identify):**
+- **Unintentional global variables**: forgetting `let`/`const`/`var` in non-strict mode silently creates a global variable, which is never eligible for collection for the lifetime of the page/process.
+- **Forgotten timers/callbacks**: an active `setInterval` (or an event listener never removed) holding a reference to objects/closures keeps them reachable indefinitely, even if they're otherwise logically "done."
+- **Closures unintentionally retaining large objects**: a closure capturing a large data structure it doesn't actually need (just because it's in the enclosing scope) keeps that entire structure alive for as long as the closure itself is reachable — a subtle, commonly-cited real-world consequence of the same closure mechanism from Section 5.
+- **Detached DOM nodes**: keeping a JavaScript reference to a DOM element after it's been removed from the document — the element itself (and everything it references) remains in memory, unreachable by the page but still referenced by your JS code.
+
+**Interview trap:** *"Can closures cause memory leaks?"* Indirectly, yes — not because closures are inherently leaky, but because a closure keeps its **entire enclosing scope** reachable/alive for as long as the closure itself exists — if that scope happens to contain large or numerous objects the closure doesn't actually use, they're kept alive unnecessarily, a subtle but real practical concern in long-running applications (e.g., single-page apps that never fully reload).
+
+---
+
+## 20. Event Delegation & the DOM Event Model
+
+**Event Bubbling & Capturing (commonly asked to explain both phases):** When an event fires on a DOM element, it propagates in two phases — **Capturing** (from the document root **down** to the target element) followed by **Bubbling** (from the target element back **up** to the root) — `addEventListener`'s third argument (`{capture: true}`) controls which phase a given listener responds to (bubbling is the default).
+
+**Event Delegation — a very commonly asked practical pattern leveraging bubbling:** Instead of attaching an individual event listener to **every** child element (expensive for many elements, and doesn't automatically work for elements added dynamically later), attach a **single** listener to a common **parent** element, and use `event.target` (the actual element the event originated from) to determine which specific child was interacted with.
+
+```javascript
+// Instead of adding a listener to every single <li>:
+document.querySelector("ul").addEventListener("click", (event) => {
+    if (event.target.tagName === "LI") {
+        console.log("Clicked:", event.target.textContent);
+    }
+});
+// Works even for <li> elements added to the <ul> AFTER this listener was attached — a key practical benefit
+```
+
+**`event.stopPropagation()` vs `event.preventDefault()` (commonly confused — a clear distinction worth stating precisely):** `stopPropagation()` prevents the event from continuing to **bubble/capture** further through the DOM tree (other listeners on ancestor/descendant elements won't fire for this event); `preventDefault()` prevents the browser's **default built-in behavior** for that event/element (e.g., a link navigating, a form submitting) but does **not** affect propagation at all — the two are independent and commonly used together or separately depending on intent.
+
+---
+
+## 21. Rapid-Fire Interview Q&A
+
+**Q: Is JavaScript single-threaded? How does it handle async operations then?**
+Yes, JS itself runs on a single thread with one call stack — asynchronous operations (timers, network requests) are handled by the surrounding runtime environment (browser/Node APIs), with completed callbacks queued and processed by the event loop only once the call stack is empty.
+
+**Q: Why does `Promise.resolve().then(...)` run before `setTimeout(..., 0)`?**
+Promise callbacks go into the microtask queue; `setTimeout` callbacks go into the macrotask queue. The event loop always fully drains the microtask queue before processing even a single macrotask, regardless of the 0ms delay.
+
+**Q: What's the Temporal Dead Zone?**
+The period between the start of a block and a `let`/`const` declaration's actual execution line, during which the variable exists (is hoisted) but is uninitialized and inaccessible — accessing it throws a `ReferenceError`, unlike `var`'s silent `undefined`.
+
+**Q: Why do arrow functions "fix" the classic `this`-losing-context bug in callbacks?**
+Arrow functions don't have their own `this` — they lexically inherit it from the enclosing scope at definition time, rather than having it dynamically redetermined by the call site like regular functions.
+
+**Q: Is JS `class` syntax "real" classes?**
+No — it's syntactic sugar over the same underlying prototypal inheritance mechanism JavaScript has always used; a `class` still ultimately configures a prototype chain under the hood.
+
+**Q: `==` vs `===` — which should you default to, and why?**
+`===` (strict equality) — `==`'s implicit type coercion rules are notoriously unintuitive (e.g., `[] == false` is `true`) and a common source of subtle bugs; `===` avoids coercion entirely, comparing both value and type directly.
+
+**Q: What are the actual falsy values in JavaScript?**
+`false, 0, -0, 0n, "", null, undefined, NaN` — everything else, including empty arrays/objects, is truthy.
+
+**Q: `Promise.all` vs `Promise.allSettled` — what's the difference?**
+`all` fails fast, rejecting immediately if any single promise rejects; `allSettled` always waits for every promise to finish, reporting each individual outcome regardless of failures.
+
+**Q: Debounce vs throttle — how do you decide which to use?**
+Debounce for "wait until activity pauses" scenarios (search-as-you-type); throttle for "respond at a steady, capped rate during continuous activity" scenarios (scroll/drag handlers).
+
+**Q: Why is CommonJS generally incompatible with tree-shaking, while ES Modules support it?**
+ESM's import/export statements are static (fixed, top-level), letting bundlers analyze the full dependency graph at build time without executing code; CommonJS's `require()` can be called dynamically/conditionally, making static analysis of what's actually used impossible to guarantee.
+
+---
+
+## Suggested Study Approach
+1. Be able to explain the event loop (call stack → Web APIs → microtask queue → macrotask queue) and correctly predict the output of a mixed `console.log`/`setTimeout`/`Promise` snippet — this is the single most distinctive, most frequently asked JavaScript-specific question.
+2. Practice the classic `this`-losing-context bug and its fixes (arrow functions, `.bind()`) — extremely commonly asked, both as trivia and as live-coding "fix this bug" exercises.
+3. Implement debounce and throttle from scratch without looking at reference code — a very common live-coding request that tests closures, `setTimeout`, and practical JS fluency simultaneously.
+4. Pair this guide with the Python guide (closures, `is`/`==` vs `===`, mutable-default-style gotchas, and prototypal vs class-based inheritance all invite direct cross-language comparison) and the OOP guide (JS's prototypal model is a genuinely different paradigm worth contrasting explicitly against classical inheritance).
+5. Practice writing a short `async`/`await` function with proper error handling and explain, out loud, exactly what happens at each `await` point in terms of the event loop — interviewers frequently probe this mechanistic understanding rather than just syntax familiarity.

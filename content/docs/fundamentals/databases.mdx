@@ -1,0 +1,581 @@
+---
+title: "Databases"
+description: "Covers SQL fundamentals, transactions/ACID, indexing, query optimization, NoSQL models, and distributed database concepts — the backbone of both LLD and system-design interviews."
+---
+Covers SQL fundamentals, transactions/ACID, indexing, query optimization, NoSQL models, and distributed database concepts — the backbone of both LLD and system-design interviews.
+
+---
+
+## Table of Contents
+1. [SELECT](#1-select)
+2. [JOINs](#2-joins)
+3. [GROUP BY](#3-group-by)
+4. [HAVING](#4-having)
+5. [Window Functions](#5-window-functions)
+6. [Indexes](#6-indexes)
+7. [Transactions](#7-transactions)
+8. [ACID](#8-acid)
+9. [Isolation Levels](#9-isolation-levels)
+10. [Locks](#10-locks)
+11. [Deadlocks](#11-deadlocks)
+12. [Normalization](#12-normalization)
+13. [Denormalization](#13-denormalization)
+14. [Query Optimization](#14-query-optimization)
+15. [Execution Plans](#15-execution-plans)
+16. [NoSQL Types](#16-nosql-types)
+17. [Replication](#17-replication)
+18. [Sharding](#18-sharding)
+19. [CAP Theorem](#19-cap-theorem)
+20. [Consistency Models](#20-consistency-models)
+21. [Rapid-Fire Interview Q&A](#21-rapid-fire-interview-qa)
+
+---
+
+## 1. SELECT
+
+The fundamental query operation for reading data.
+
+```sql
+SELECT id, name, email
+FROM users
+WHERE age > 18
+ORDER BY created_at DESC
+LIMIT 10 OFFSET 20;
+```
+
+**Logical order of execution (frequently asked — NOT the order you write it in):**
+```
+FROM → JOIN → WHERE → GROUP BY → HAVING → SELECT → DISTINCT → ORDER BY → LIMIT/OFFSET
+```
+**Interview trap:** *"Why can't you reference a `SELECT` alias in the `WHERE` clause?"* Because `WHERE` is evaluated **before** `SELECT` in logical execution order — the alias doesn't exist yet at that point. (You *can* usually reference aliases in `ORDER BY`/`GROUP BY`/`HAVING` since those execute after `SELECT`, depending on the DB engine.)
+
+`SELECT *` vs explicit columns: `SELECT *` is discouraged in production — it's fragile to schema changes, pulls unnecessary data (bandwidth/memory cost), and can prevent certain index-only scan optimizations (see Section 14).
+
+---
+
+## 2. JOINs
+
+Combining rows from two or more tables based on a related column.
+
+```sql
+-- Sample tables
+-- users(id, name)         orders(id, user_id, total)
+```
+
+### INNER JOIN
+Returns only rows with matches in **both** tables.
+```sql
+SELECT u.name, o.total
+FROM users u
+INNER JOIN orders o ON u.id = o.user_id;
+```
+
+### LEFT (OUTER) JOIN
+Returns all rows from the left table, plus matched rows from the right (NULLs where no match).
+```sql
+SELECT u.name, o.total
+FROM users u
+LEFT JOIN orders o ON u.id = o.user_id;
+-- users with no orders still appear, with o.total = NULL
+```
+
+### RIGHT (OUTER) JOIN
+Mirror of LEFT JOIN — all rows from the right table, matched rows from the left. (Rarely used in practice; usually rewritten as a LEFT JOIN by swapping table order for readability.)
+
+### FULL (OUTER) JOIN
+All rows from both tables; NULLs where no match on either side. (Not supported natively in MySQL — emulated via `UNION` of LEFT and RIGHT JOIN.)
+
+### CROSS JOIN
+Cartesian product — every row from table A paired with every row from table B (no `ON` condition). Rows = `|A| × |B|`. Used deliberately for generating combinations (e.g., all size × color combos for a product), but a common accidental bug when a JOIN condition is forgotten.
+
+### SELF JOIN
+A table joined to itself — useful for hierarchical/relational data within one table (e.g., an `employees` table with a `manager_id` referencing another row's `id`).
+```sql
+SELECT e.name AS employee, m.name AS manager
+FROM employees e
+LEFT JOIN employees m ON e.manager_id = m.id;
+```
+
+**Visual summary (classic whiteboard question):**
+```
+INNER JOIN:  A ∩ B
+LEFT JOIN:   All of A + matching B
+RIGHT JOIN:  All of B + matching A
+FULL JOIN:   All of A + All of B
+```
+
+**Interview trap:** Putting a filter on the right-side table in the `WHERE` clause vs the `ON` clause changes LEFT JOIN semantics:
+```sql
+-- WRONG (if intent is to keep all users): filters OUT users with no/mismatched orders
+... LEFT JOIN orders o ON u.id = o.user_id WHERE o.total > 100;
+
+-- RIGHT: keeps all users, only restricts which orders are matched
+... LEFT JOIN orders o ON u.id = o.user_id AND o.total > 100;
+```
+This is a very commonly tested subtlety — putting the extra condition in `WHERE` effectively converts the LEFT JOIN into an INNER JOIN because rows with `NULL` fail the `WHERE` comparison.
+
+---
+
+## 3. GROUP BY
+
+Aggregates rows sharing a common value into summary rows, typically used with aggregate functions (`COUNT`, `SUM`, `AVG`, `MAX`, `MIN`).
+
+```sql
+SELECT user_id, COUNT(*) AS order_count, SUM(total) AS total_spent
+FROM orders
+GROUP BY user_id;
+```
+
+**Rule:** Every non-aggregated column in `SELECT` must appear in `GROUP BY` (strictly enforced in Postgres/SQL Server; MySQL historically allowed it but with unpredictable results — a common gotcha to mention).
+
+---
+
+## 4. HAVING
+
+Filters **groups** (post-aggregation), whereas `WHERE` filters **rows** (pre-aggregation).
+
+```sql
+SELECT user_id, COUNT(*) AS order_count
+FROM orders
+WHERE status = 'completed'      -- filters individual rows BEFORE grouping
+GROUP BY user_id
+HAVING COUNT(*) > 5;            -- filters groups AFTER aggregation
+```
+
+**Interview trap:** *"Why can't you write `WHERE COUNT(*) > 5`?"* Because `WHERE` executes before `GROUP BY`/aggregation in logical order (see Section 1's execution order) — the aggregate value doesn't exist yet at that stage. `HAVING` exists specifically to filter on aggregate results.
+
+---
+
+## 5. Window Functions
+
+Perform calculations across a set of rows related to the current row **without collapsing them into a single output row** (unlike `GROUP BY`).
+
+```sql
+SELECT
+  name,
+  department,
+  salary,
+  RANK() OVER (PARTITION BY department ORDER BY salary DESC) AS dept_rank,
+  AVG(salary) OVER (PARTITION BY department) AS dept_avg_salary,
+  SUM(salary) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_total
+FROM employees;
+```
+
+**Common window functions:**
+- `ROW_NUMBER()` — sequential unique number per row within a partition (no ties).
+- `RANK()` — rank with **gaps** after ties (1, 2, 2, 4).
+- `DENSE_RANK()` — rank **without gaps** after ties (1, 2, 2, 3).
+- `LAG(col, n)` / `LEAD(col, n)` — value from a preceding/following row (great for period-over-period comparisons, e.g., "sales vs. previous month").
+- `NTILE(n)` — bucket rows into `n` roughly equal groups (e.g., quartiles).
+- Aggregate functions as window functions (`SUM() OVER`, `AVG() OVER`) — running totals, moving averages.
+
+**`PARTITION BY`** divides rows into groups (like `GROUP BY`, but doesn't collapse rows) — the window function is applied independently within each partition.
+
+**GROUP BY vs Window Functions (classic interview question):**
+| | GROUP BY | Window Function |
+|---|---|---|
+| Output rows | Collapsed — one row per group | Preserved — one row per original row |
+| Use case | Summary/aggregate reports | Rankings, running totals, comparisons to peers/previous rows, while keeping row-level detail |
+
+**Real interview use case:** "Find the top 3 highest-paid employees **per department**" — impossible cleanly with `GROUP BY` alone (which would collapse rows), trivial with `RANK() OVER (PARTITION BY department ORDER BY salary DESC)` + a `WHERE dept_rank <= 3` in an outer query (since window functions can't be filtered directly in `WHERE`/`HAVING` — they run *after* those clauses in logical order, so you need a subquery or CTE to filter on them).
+
+---
+
+## 6. Indexes
+
+A separate data structure (commonly a **B-Tree**, or a **Hash index** for exact-match lookups) that speeds up data retrieval by avoiding a full table scan, at the cost of extra storage and slower writes (the index must be updated on every INSERT/UPDATE/DELETE).
+
+```sql
+CREATE INDEX idx_users_email ON users(email);
+```
+
+**B-Tree index (most common default):** Keeps data sorted, enabling `O(log n)` lookups, and efficiently supports range queries (`<`, `>`, `BETWEEN`), sorting (`ORDER BY`), and prefix matching (`LIKE 'abc%'`).
+
+**Hash index:** `O(1)` average lookup for exact equality (`=`) only — cannot support range queries or sorting. Less commonly the default; used in specific engines/scenarios.
+
+**Composite (multi-column) index:** `CREATE INDEX idx ON orders(user_id, created_at)`. Follows the **"leftmost prefix" rule** — the index can be used for queries filtering on `user_id` alone, or `user_id + created_at` together, but **not** for queries filtering on `created_at` alone (since it's not the leftmost column). A very commonly tested subtlety.
+
+**Covering index:** An index that includes all columns needed by a query (in the index itself), allowing the DB to satisfy the query **entirely from the index** without touching the actual table rows ("index-only scan") — a major performance win. This is why `SELECT *` can defeat this optimization (Section 1) — you'd need columns not present in the index.
+
+**Trade-offs (a very commonly asked balance question):**
+- ✅ Dramatically speeds up `SELECT`/`WHERE`/`JOIN`/`ORDER BY` on indexed columns.
+- ❌ Slows down `INSERT`/`UPDATE`/`DELETE` (index must be maintained on every write).
+- ❌ Consumes additional disk space.
+- **Rule of thumb:** Index columns that are frequently filtered/joined/sorted on, especially in read-heavy tables; avoid over-indexing write-heavy tables or low-cardinality columns (e.g., a boolean `is_active` column rarely benefits much from indexing alone, though it can help combined with other columns).
+
+**Clustered vs Non-clustered index (commonly asked, esp. SQL Server/MySQL InnoDB context):**
+- **Clustered**: determines the **physical order** of data storage on disk — a table can have only **one** (often the primary key). The leaf nodes of the index ARE the actual data rows.
+- **Non-clustered**: a separate structure holding pointers (or the primary key value, in InnoDB) back to the actual row — a table can have **many**.
+
+---
+
+## 7. Transactions
+
+A sequence of one or more database operations executed as a single logical unit of work — either **all** operations succeed (`COMMIT`) or **none** do (`ROLLBACK`).
+
+```sql
+BEGIN TRANSACTION;
+  UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+  UPDATE accounts SET balance = balance + 100 WHERE id = 2;
+COMMIT; -- both updates persist together, or neither does if an error occurs before COMMIT
+```
+
+Classic use case: bank transfers — you never want money debited from one account without it being credited to the other, even if the server crashes mid-operation.
+
+**`SAVEPOINT`**: allows partial rollback within a larger transaction, without aborting the entire transaction.
+
+---
+
+## 8. ACID
+
+The four guarantees a reliable transactional database provides:
+
+- **Atomicity**: All operations in a transaction succeed, or all are rolled back — no partial execution ("all or nothing").
+- **Consistency**: A transaction brings the database from one **valid** state to another, respecting all defined rules (constraints, triggers, cascades) — it never leaves data in a state that violates integrity constraints.
+- **Isolation**: Concurrent transactions don't interfere with each other — the result is as if transactions ran sequentially, even though they may run in parallel (degree of isolation configurable — see Section 9).
+- **Durability**: Once a transaction is committed, it survives permanently, even in the event of a crash (typically ensured via write-ahead logging (WAL) to persistent storage).
+
+**Interview trap:** "Consistency" in ACID is about **data integrity/business rules**, and is a different concept from "consistency" in the CAP theorem (Section 19), which is about whether **all nodes see the same data at the same time** in a distributed system. Interviewers frequently probe whether you can distinguish these two uses of the same word.
+
+---
+
+## 9. Isolation Levels
+
+Define how much transactions are isolated from the effects of other concurrent transactions — a trade-off between **consistency guarantees** and **performance/concurrency**.
+
+| Isolation Level | Dirty Read | Non-Repeatable Read | Phantom Read |
+|---|---|---|---|
+| **Read Uncommitted** | Possible | Possible | Possible |
+| **Read Committed** | Prevented | Possible | Possible |
+| **Repeatable Read** | Prevented | Prevented | Possible* |
+| **Serializable** | Prevented | Prevented | Prevented |
+
+*Note: MySQL's InnoDB `REPEATABLE READ` actually prevents phantom reads too via gap locking/MVCC snapshots — a notable divergence from the SQL standard, worth mentioning if asked about MySQL specifically.
+
+**The three anomalies, defined (commonly asked to explain each):**
+- **Dirty Read**: reading uncommitted data from another transaction that might later be rolled back (you read data that "never really existed").
+- **Non-Repeatable Read**: re-reading the same row within a transaction returns **different values** because another transaction updated and committed it in between your reads.
+- **Phantom Read**: re-running the same range query within a transaction returns a **different set of rows** because another transaction inserted/deleted rows matching that range in between.
+
+**Trade-off:** Higher isolation levels (Serializable) give the strongest correctness guarantees but reduce concurrency (more locking/blocking, or more transaction aborts under optimistic concurrency control) and hurt throughput. Most production systems default to **Read Committed** (PostgreSQL, Oracle default) as a pragmatic balance.
+
+**MVCC (Multi-Version Concurrency Control):** How many modern databases (PostgreSQL, MySQL InnoDB) implement isolation without heavy locking — instead of locking rows for reads, the DB keeps multiple versions of a row and gives each transaction a consistent "snapshot" view as of when it started, so readers don't block writers and vice versa. Worth mentioning as the modern mechanism behind Repeatable Read/Read Committed in these engines.
+
+---
+
+## 10. Locks
+
+Mechanisms to control concurrent access to data, preventing conflicting operations from corrupting state.
+
+**Types:**
+- **Shared Lock (Read Lock / S-Lock)**: Multiple transactions can hold a shared lock on the same resource simultaneously (all reading) — but no one can write while any shared lock is held.
+- **Exclusive Lock (Write Lock / X-Lock)**: Only one transaction can hold it; blocks all other reads and writes on that resource until released.
+
+**Granularity:**
+- **Row-level locking**: locks individual rows — high concurrency, more overhead to manage many locks.
+- **Table-level locking**: locks the entire table — simpler, but severely limits concurrency (all operations on the table serialize).
+- **Page-level locking**: a middle ground, locking a block/page of rows.
+
+**Optimistic vs Pessimistic Locking (very commonly asked distinction):**
+- **Pessimistic locking**: Assume conflicts are likely — acquire a lock **before** reading/modifying data, blocking other transactions until released (`SELECT ... FOR UPDATE`). Safer under high contention, but reduces concurrency/throughput.
+- **Optimistic locking**: Assume conflicts are rare — don't lock upfront; instead, check (typically via a `version` column or timestamp) at **commit time** whether the data changed since it was read; if it did, reject/retry the transaction. Higher concurrency in low-contention scenarios, but requires handling retry logic in application code.
+
+```sql
+-- Optimistic locking pattern
+UPDATE products SET stock = stock - 1, version = version + 1
+WHERE id = 42 AND version = 5; -- fails (0 rows affected) if another transaction already updated it
+```
+
+---
+
+## 11. Deadlocks
+
+Occurs when two or more transactions are each waiting for a lock held by the other, forming a **cycle** — none can proceed.
+
+```
+Transaction A: locks Row 1, then tries to lock Row 2 (held by B) → waits
+Transaction B: locks Row 2, then tries to lock Row 1 (held by A) → waits
+→ Deadlock: neither can proceed
+```
+
+**How databases handle it:** Most DB engines run a **deadlock detection** algorithm (building a wait-for graph and checking for cycles) and automatically abort/rollback one of the transactions (the "victim," often the one with the least work done) to break the cycle, returning an error to the application, which should then retry.
+
+**Prevention strategies (commonly asked "how would you avoid this"):**
+- **Consistent lock ordering**: always acquire locks on resources in the same, agreed-upon order across all transactions (e.g., always lock the lower `id` first) — eliminates the circular-wait condition entirely.
+- Keep transactions **short** and acquire locks as late as possible, release as early as possible.
+- Use appropriate isolation levels — lower isolation reduces lock contention (but weakens consistency guarantees, so it's a trade-off).
+- Set lock timeouts so a stuck transaction fails fast rather than hanging indefinitely.
+
+---
+
+## 12. Normalization
+
+The process of organizing relational data to reduce **redundancy** and prevent **update/insert/delete anomalies**, by decomposing tables and defining relationships via foreign keys.
+
+**Normal Forms (know the first three well — most commonly asked):**
+
+- **1NF (First Normal Form)**: Each column holds atomic (indivisible) values; no repeating groups/arrays in a single column.
+  ```
+  ❌ orders(id, items="apple,banana,milk")   → violates 1NF (non-atomic column)
+  ✅ Separate order_items table with one row per item
+  ```
+
+- **2NF**: Must be in 1NF, AND every non-key column must depend on the **entire** primary key (relevant only for composite keys — eliminates **partial dependency**).
+  ```
+  ❌ order_items(order_id, product_id, product_name, quantity)
+     — product_name depends only on product_id, not the full (order_id, product_id) key
+  ✅ Move product_name to a separate products table
+  ```
+
+- **3NF**: Must be in 2NF, AND no **transitive dependencies** — non-key columns must depend only on the primary key, not on other non-key columns.
+  ```
+  ❌ employees(id, department_id, department_name)
+     — department_name depends on department_id, not directly on employee id (transitive)
+  ✅ Move department_name to a separate departments table
+  ```
+
+- **BCNF (Boyce-Codd Normal Form)**: A stricter version of 3NF, handling certain edge cases with overlapping composite candidate keys (less commonly quizzed in-depth, but good to name-drop as "the stricter version of 3NF").
+
+**Why normalize (the anomalies it prevents — a common question):**
+- **Update anomaly**: the same fact (e.g., a department name) duplicated across many rows means updating it requires changing every occurrence — miss one, and data becomes inconsistent.
+- **Insert anomaly**: can't add certain data without also having unrelated data (e.g., can't add a new department without an employee, if department info is baked into the employees table).
+- **Delete anomaly**: deleting a row unintentionally destroys unrelated data (e.g., deleting the last employee in a department erases the department's info entirely).
+
+---
+
+## 13. Denormalization
+
+The deliberate, controlled introduction of redundancy (duplicating data or merging tables) to **improve read performance**, at the cost of extra storage and more complex writes (must keep duplicated data in sync).
+
+```sql
+-- Normalized: must JOIN orders + users every time you display an order with the customer's name
+-- Denormalized: store customer_name directly on the orders table too, avoiding the JOIN
+orders(id, user_id, customer_name, total)
+```
+
+**When to denormalize (commonly asked trade-off discussion):**
+- Read-heavy systems where JOIN cost/latency is a bottleneck (e.g., analytics dashboards, high-traffic read APIs).
+- Data warehouses/OLAP systems, which often use denormalized **star/snowflake schemas** specifically optimized for fast aggregate queries over normalized OLTP data.
+- When the duplicated data changes rarely, minimizing sync overhead.
+
+**Normalization vs Denormalization (the classic trade-off table):**
+| | Normalization | Denormalization |
+|---|---|---|
+| Optimizes for | Write consistency, storage efficiency | Read performance |
+| Redundancy | Minimized | Deliberately introduced |
+| JOINs needed | More | Fewer |
+| Update complexity | Simple (single source of truth) | Complex (must sync duplicates) |
+| Typical use case | OLTP (transactional systems) | OLAP (analytics/reporting), caching layers |
+
+---
+
+## 14. Query Optimization
+
+Techniques to make queries run faster.
+
+**Key strategies (commonly discussed in interviews):**
+1. **Use indexes appropriately** (Section 6) on columns used in `WHERE`, `JOIN`, `ORDER BY`.
+2. **Avoid `SELECT *`** — fetch only needed columns (enables covering-index optimizations, reduces I/O).
+3. **Avoid functions on indexed columns in `WHERE`** — `WHERE YEAR(created_at) = 2024` prevents index usage (the function must be applied to every row, defeating the index); rewrite as a range: `WHERE created_at >= '2024-01-01' AND created_at < '2025-01-01'`.
+4. **Use `EXISTS` instead of `IN` for large subqueries** in some engines (can short-circuit on first match, versus materializing the full subquery result) — though modern query planners often optimize this equivalently; worth knowing as a historical rule of thumb.
+5. **Limit result sets** — use `LIMIT`/pagination (Section 14 of the APIs guide) rather than fetching everything and filtering in application code.
+6. **Avoid N+1 query problems** — e.g., fetching a list of orders, then looping and issuing a separate query per order to get its items; use a JOIN or a single batched query instead.
+7. **Batch writes** — combine multiple `INSERT`s into one statement rather than one round-trip per row.
+8. **Denormalize selectively** (Section 13) if JOIN cost is a proven bottleneck.
+9. **Analyze the execution plan** (Section 15) to find the actual bottleneck rather than guessing.
+
+**N+1 query problem (very commonly asked, especially with ORMs):**
+```
+1 query: SELECT * FROM orders WHERE user_id = 1;         → returns 10 orders
+N queries: for each order, SELECT * FROM items WHERE order_id = ?;  → 10 more queries
+= 11 total queries instead of 1-2
+```
+**Fix:** Use a `JOIN`, or an ORM's eager-loading feature (e.g., `.include()`/`.prefetch_related()`), or a single `WHERE order_id IN (...)` batched query.
+
+---
+
+## 15. Execution Plans
+
+A breakdown of the exact steps a database engine will take (or took) to execute a query — the primary diagnostic tool for query optimization.
+
+```sql
+EXPLAIN ANALYZE
+SELECT * FROM orders WHERE user_id = 42;
+```
+
+**Key things to look for (commonly asked what you'd check):**
+- **Seq Scan / Full Table Scan** vs **Index Scan**: a sequential scan on a large table (when an index scan was expected) signals a missing or unused index.
+- **Estimated vs Actual rows**: large discrepancies suggest outdated statistics (the query planner's cost estimates rely on table statistics — running `ANALYZE`/`UPDATE STATISTICS` periodically keeps these accurate).
+- **Join algorithm used**: Nested Loop (good for small datasets/indexed lookups), Hash Join (good for larger unsorted datasets), Merge Join (good when inputs are already sorted, e.g., on an indexed column).
+- **Cost**: a relative unit (not literal time) representing the planner's estimate of work — useful for comparing alternative query plans, not for absolute timing.
+
+**Interview trap:** *"Why might a query with an index still perform a full table scan?"* Common reasons: the query uses a function on the indexed column (defeats index usage, per Section 14 point 3); the optimizer estimates a full scan is cheaper for a low-selectivity condition (e.g., filtering on a column where 90% of rows match — an index scan would actually be slower due to extra I/O for each row lookup); outdated statistics leading to a bad plan choice; the leftmost-prefix rule violation on composite indexes (Section 6).
+
+---
+
+## 16. NoSQL Types
+
+Databases that relax the strict relational/tabular model, typically trading some consistency/query flexibility for horizontal scalability, schema flexibility, or performance for specific access patterns.
+
+### Document
+Stores semi-structured data as JSON/BSON-like documents; flexible schema.
+```json
+{ "_id": 1, "name": "Alice", "orders": [{ "id": 101, "total": 50 }] }
+```
+- **Examples**: MongoDB, CouchDB.
+- **Best for**: content management, catalogs, user profiles — data naturally modeled as nested objects, where related data is often accessed together (embedding avoids JOINs).
+
+### Key-Value
+Simplest model — a hash map: unique key → opaque value (blob, string, JSON).
+```
+GET user:42:session → "{ token: 'xyz', expires: ... }"
+```
+- **Examples**: Redis, DynamoDB (also has document features), Memcached.
+- **Best for**: caching, session storage, feature flags — extremely fast O(1) lookups by key.
+
+### Column(-family)
+Stores data by column rather than by row, grouped into column families; optimized for queries scanning specific columns across huge numbers of rows.
+- **Examples**: Cassandra, HBase, Google Bigtable.
+- **Best for**: time-series data, write-heavy workloads at massive scale, analytics queries touching few columns across billions of rows.
+
+### Graph
+Stores data as nodes (entities) and edges (relationships), optimized for traversing relationships.
+```
+(Alice)-[:FRIENDS_WITH]->(Bob)-[:WORKS_AT]->(Acme Corp)
+```
+- **Examples**: Neo4j, Amazon Neptune.
+- **Best for**: social networks, recommendation engines, fraud detection — anywhere relationship traversal (not just individual record lookup) is the primary query pattern.
+
+**SQL vs NoSQL (classic high-level interview question):**
+| | SQL (Relational) | NoSQL |
+|---|---|---|
+| Schema | Fixed, enforced upfront | Flexible/dynamic |
+| Scaling | Traditionally vertical (though modern SQL DBs support sharding too) | Designed for horizontal scaling |
+| Consistency | Strong (ACID) by default | Often eventual consistency (tunable in many systems) |
+| Relationships | JOINs, foreign keys | Often denormalized/embedded; joins are expensive or unsupported |
+| Best for | Complex queries, transactional integrity, structured data with clear relationships | High-scale, flexible/evolving schemas, specific access-pattern optimization |
+
+**Interview trap:** NoSQL isn't inherently "better for scale" or "schema-less" as a blanket rule — it's a family of different data models, each optimized for **specific access patterns**. The right choice depends on your query patterns, consistency needs, and scale — not a universal SQL-vs-NoSQL winner.
+
+---
+
+## 17. Replication
+
+Maintaining copies of the same data on multiple database nodes, for **availability**, **fault tolerance**, and **read scalability**.
+
+### Leader-Follower (Master-Slave) Replication
+One **leader/primary** node handles all writes; changes are propagated to one or more **follower/replica** nodes, which typically serve read traffic.
+```
+Write → Leader → replicates to → Follower 1, Follower 2, ...
+Reads can be served by Leader OR Followers (load-balanced)
+```
+- **Pros**: scales read throughput horizontally; followers provide failover candidates if the leader dies.
+- **Cons**: single point of write bottleneck/failure (until failover completes); replication lag can cause followers to briefly serve stale data.
+
+### Synchronous vs Asynchronous replication (commonly asked trade-off)
+- **Synchronous**: leader waits for confirmation from follower(s) before acknowledging the write as committed — strong consistency, but higher write latency, and availability suffers if a follower is slow/down.
+- **Asynchronous**: leader acknowledges the write immediately, replicates in the background — lower latency, higher availability, but risk of **data loss** if the leader crashes before replicating (and risk of followers serving stale/"replication lag" data).
+
+### Multi-Leader (Multi-Master) Replication
+Multiple nodes can accept writes, replicating to each other — improves write availability/geo-distribution, but introduces **write conflicts** that must be resolved (e.g., "last write wins," vector clocks, application-level merge logic).
+
+### Leaderless Replication
+No designated leader — clients write to multiple replicas directly (e.g., Dynamo-style systems using quorum reads/writes: `W + R > N` ensures overlap between write and read sets for consistency guarantees).
+
+---
+
+## 18. Sharding
+
+**Sharding (horizontal partitioning)** splits a single logical dataset across multiple database nodes, each holding a subset of the data — used to scale beyond what a single machine can handle (storage or throughput).
+
+### Sharding strategies (commonly asked to compare)
+
+- **Range-based sharding**: partition by a key range (e.g., user IDs 1-1M on shard A, 1M-2M on shard B). Simple, supports efficient range queries, but risks **hotspots** if certain ranges get disproportionate traffic (e.g., newest users, sequentially assigned IDs, all hitting the newest/last shard).
+
+- **Hash-based sharding**: apply a hash function to the shard key, then assign based on the hash (e.g., `hash(user_id) % num_shards`). Distributes load evenly, avoiding hotspots, but makes range queries across shards inefficient (data is scattered non-contiguously) and complicates adding/removing shards (naive `% num_shards` requires massive data reshuffling when `num_shards` changes).
+
+- **Consistent hashing**: a refinement of hash-based sharding that minimizes data movement when shards are added/removed — only a fraction of keys need to be remapped (roughly `1/N` of keys), instead of nearly all of them as with naive modulo hashing. Extremely commonly asked in system-design interviews (used by DynamoDB, Cassandra, CDNs, load balancers).
+
+- **Directory-based sharding**: a lookup service/mapping table explicitly tracks which shard holds which key range — flexible (can rebalance by just updating the mapping) but adds a dependency on the lookup service (potential bottleneck/single point of failure unless itself made highly available).
+
+**Choosing a shard key (critical, commonly probed design question):** Should have high cardinality (many distinct values, to spread data evenly) and align with the most common query patterns (queries that don't include the shard key often must **fan out** to all shards, which is expensive) — e.g., sharding by `user_id` works well if most queries are scoped to a single user, but poorly if you frequently need cross-user aggregate queries.
+
+**Replication vs Sharding (frequently confused, worth stating clearly):** Replication copies the **same** data to multiple nodes (for availability/read scaling). Sharding splits **different** data across multiple nodes (for storage/write scaling). They're complementary and commonly combined (e.g., each shard is itself replicated for fault tolerance).
+
+---
+
+## 19. CAP Theorem
+
+States that a distributed data system can only simultaneously guarantee **two out of three** of the following during a network partition:
+
+- **Consistency (C)**: every read receives the most recent write (or an error) — all nodes see the same data at the same time.
+- **Availability (A)**: every request receives a (non-error) response, without guarantee it's the most recent write.
+- **Partition Tolerance (P)**: the system continues to operate despite network partitions (communication breakdown between nodes).
+
+**Critical nuance (very commonly tested):** In any real distributed system spanning multiple nodes, **network partitions WILL happen eventually** — so partition tolerance isn't really optional; the real-world choice is between **C and A when a partition occurs**. So CAP is really more accurately framed as: "when a partition happens, do you sacrifice consistency (choose AP) or availability (choose CP)?"
+
+- **CP systems** (consistency + partition tolerance, sacrifice availability during a partition): e.g., traditional RDBMS in a distributed setup, MongoDB (in certain configurations), HBase, Zookeeper. During a partition, minority-side nodes refuse requests rather than risk serving stale/conflicting data.
+- **AP systems** (availability + partition tolerance, sacrifice strong consistency during a partition): e.g., Cassandra, DynamoDB, CouchDB. All nodes keep responding during a partition, but might return stale or conflicting data, reconciled later (eventual consistency).
+
+**Interview trap:** *"Can't you just have all three (CAP)?"* No — this is the theorem's core point, and it's specifically about behavior **during a network partition**; when there's no partition, a well-designed system can offer both strong consistency and availability. CAP is about the unavoidable trade-off **only in the presence of a partition**, not a permanent, always-active trade-off.
+
+---
+
+## 20. Consistency Models
+
+Beyond the binary CAP framing, there's a spectrum of consistency guarantees distributed systems can offer:
+
+- **Strong Consistency**: Every read reflects the most recent committed write, as if there were only one copy of the data (linearizability is the strictest form of this). Simplest to reason about, but costs latency/availability (often requires coordination/quorum across nodes for every operation).
+
+- **Eventual Consistency**: If no new updates are made, all replicas will **eventually** converge to the same value — but there's no bound on how long that might take, and reads in the meantime may return stale data. Common in AP systems (DNS is a classic real-world example of eventual consistency).
+
+- **Causal Consistency**: Operations that are causally related (e.g., a reply to a comment) are seen by all nodes in the same order; unrelated operations may be seen in different orders on different nodes. A middle ground between strong and eventual.
+
+- **Read-Your-Writes Consistency**: A user is guaranteed to see their **own** writes immediately in subsequent reads (even if other users might briefly see a stale version) — commonly implemented by routing a user's reads to the same node/replica they wrote to, or a "sticky session."
+
+- **Monotonic Reads**: Once a user has seen a particular value, subsequent reads won't show an **older** value (prevents the confusing experience of data "going back in time" across successive reads, which can otherwise happen when reads hit different replicas at different lag states).
+
+**Practical takeaway (a common system-design closing question):** Choosing a consistency model is about matching **user experience requirements** to system trade-offs — e.g., a banking balance likely needs strong consistency, while a social media "like count" is usually fine with eventual consistency (a few seconds of staleness on a like count is imperceptible/inconsequential, but it's a critical difference for financial transactions).
+
+---
+
+## 21. Rapid-Fire Interview Q&A
+
+**Q: What's the difference between `WHERE` and `HAVING`?**
+`WHERE` filters individual rows before grouping/aggregation; `HAVING` filters groups after aggregation (Section 4).
+
+**Q: Why would a LEFT JOIN unexpectedly behave like an INNER JOIN?**
+If a filter on the right table's column is placed in `WHERE` instead of the `ON` clause, rows with `NULL` (from unmatched left rows) get excluded by the `WHERE` comparison, effectively converting it into an INNER JOIN (Section 2).
+
+**Q: What's the difference between a clustered and non-clustered index?**
+Clustered determines physical row storage order (one per table, data lives in the leaf nodes); non-clustered is a separate lookup structure pointing back to the actual rows (many allowed per table) (Section 6).
+
+**Q: Optimistic vs pessimistic locking — when would you use each?**
+Pessimistic when conflicts are frequent/contention is high (lock upfront to avoid wasted work); optimistic when conflicts are rare (avoid locking overhead, detect and retry on the rare conflict) (Section 10).
+
+**Q: What causes a deadlock, and how do databases resolve it?**
+A circular wait where transactions hold locks the others need. Databases detect cycles via a wait-for graph and abort one transaction (the "victim") to break the cycle (Section 11).
+
+**Q: When would you denormalize a database?**
+When read performance/JOIN cost is a proven bottleneck and the duplicated data changes infrequently — common in analytics/reporting systems and read-heavy APIs (Section 13).
+
+**Q: What's the real-world nuance in the CAP theorem people often get wrong?**
+Partition tolerance isn't optional in real distributed systems — the actual trade-off is between consistency and availability specifically **during** a partition, not a constant three-way choice (Section 19).
+
+**Q: How does sharding differ from replication?**
+Sharding splits *different* data across nodes (scales storage/write throughput); replication copies the *same* data across nodes (scales read throughput/improves availability) — they're often combined (Section 18).
+
+**Q: Why is consistent hashing preferred over simple `hash % N` sharding?**
+Simple modulo hashing requires remapping nearly all keys when `N` (number of shards) changes; consistent hashing only remaps roughly `1/N` of keys, minimizing costly data movement during scaling events (Section 18).
+
+**Q: What's the N+1 query problem and how do you fix it?**
+Issuing one query to fetch a list, then a separate query per item to fetch related data (N extra queries) — fixed via a JOIN, a batched `WHERE id IN (...)` query, or ORM eager-loading (Section 14).
+
+---
+
+## Suggested Study Approach
+1. Practice writing JOIN queries (all types) and window function queries from memory — these show up constantly in SQL screening rounds.
+2. Be able to explain ACID, isolation levels, and the three read anomalies (dirty/non-repeatable/phantom) fluently — extremely common interview staple.
+3. Practice the CAP theorem explanation with the "partition tolerance isn't optional" nuance — this single insight differentiates strong answers from surface-level ones.
+4. Pair this section with Section 3 (APIs & HTTP) since pagination, caching, and idempotency all connect directly to database design choices (e.g., cursor pagination relying on indexed, sortable columns).
+5. For system-design interviews specifically, rehearse sharding strategy selection and replication trade-offs (sync vs async) as these come up in almost every "design a scalable X" prompt.

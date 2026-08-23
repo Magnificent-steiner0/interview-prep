@@ -1,0 +1,655 @@
+---
+title: "Object-Oriented Programming"
+description: "This guide covers every OOP topic in the roadmap in interview-ready depth: definitions, why it matters, code examples, common interview questions, and pitfalls to avoid."
+---
+This guide covers every OOP topic in the roadmap in interview-ready depth: definitions, why it matters, code examples, common interview questions, and pitfalls to avoid.
+
+---
+
+## Table of Contents
+1. [Classes vs Objects](#1-classes-vs-objects)
+2. [Encapsulation](#2-encapsulation)
+3. [Abstraction](#3-abstraction)
+4. [Inheritance](#4-inheritance)
+5. [Polymorphism](#5-polymorphism)
+6. [Composition vs Inheritance](#6-composition-vs-inheritance)
+7. [Association, Aggregation, Composition](#7-association-aggregation-composition)
+8. [Interfaces](#8-interfaces)
+9. [Abstract Classes](#9-abstract-classes)
+10. [SOLID Principles](#10-solid-principles)
+11. [Coupling / Cohesion](#11-coupling--cohesion)
+12. [Immutability](#12-immutability)
+13. [Exception Handling](#13-exception-handling)
+14. [Practice Problems (LLD)](#14-practice-problems)
+15. [Rapid-Fire Interview Q&A](#15-rapid-fire-interview-qa)
+
+---
+
+## 1. Classes vs Objects
+
+**Class**: A blueprint/template that defines the structure (fields/attributes) and behavior (methods) that its instances will have. It exists at compile time / as a type definition; it doesn't occupy memory for data until instantiated.
+
+**Object**: A concrete instance of a class, created at runtime. It has its own state (values for the fields) but shares the class's method definitions.
+
+```java
+class Car {
+    private String model;
+    private int speed;
+
+    public Car(String model) {
+        this.model = model;
+        this.speed = 0;
+    }
+
+    public void accelerate(int amount) {
+        speed += amount;
+    }
+}
+
+// Objects (instances)
+Car tesla = new Car("Model 3");
+Car civic = new Car("Civic");
+tesla.accelerate(20); // only tesla's speed changes
+```
+
+**Key interview points:**
+- A class defines *type*; an object is a *value* of that type.
+- Multiple objects of the same class have independent state but share the same method code (methods aren't duplicated per object — they live once in the class's method table).
+- In memory: objects typically live on the heap; references/pointers to them may live on the stack (language-dependent — e.g., Java heap-allocates all objects, C++ allows stack allocation, Python everything is a heap object with reference semantics).
+
+**Common question:** *"Can two objects of the same class have different behavior?"*
+Yes — via polymorphism (overriding), via composition (holding different strategy objects), or by simply having different field values that change branching logic.
+
+---
+
+## 2. Encapsulation
+
+**Definition:** Bundling data (fields) and the methods that operate on that data into a single unit (the class), while restricting direct external access to internal state. Achieved via access modifiers (`private`, `protected`, `public`) and exposing controlled access through getters/setters or methods.
+
+**Why it matters:**
+- Protects invariants (e.g., a `BankAccount` balance should never go negative — a public setter could violate this, but a `withdraw()` method can enforce the rule).
+- Reduces coupling: internal representation can change without breaking external code, as long as the public interface stays the same.
+- Improves maintainability and testability.
+
+```java
+class BankAccount {
+    private double balance; // hidden from outside
+
+    public BankAccount(double initialBalance) {
+        if (initialBalance < 0) throw new IllegalArgumentException("Negative balance");
+        this.balance = initialBalance;
+    }
+
+    public void withdraw(double amount) {
+        if (amount > balance) throw new IllegalStateException("Insufficient funds");
+        balance -= amount;
+    }
+
+    public double getBalance() {
+        return balance; // read-only exposure
+    }
+}
+```
+
+**Interview traps:**
+- Encapsulation ≠ just "using private fields." It's about *protecting invariants* and *hiding implementation details*, not merely syntax.
+- A class with private fields but public getters/setters for every field ("anemic" getter/setter spam) technically compiles but often **breaks** the spirit of encapsulation because it exposes internal representation and puts no behavior/validation around it.
+- Question: *"Is a class with all public fields still encapsulated?"* No — there's no hiding of state, and no invariant protection.
+
+---
+
+## 3. Abstraction
+
+**Definition:** Exposing only the essential features of an object/system while hiding the underlying complexity/implementation details. The consumer interacts with a simplified interface (*what* an object does), not the internals (*how* it does it).
+
+**Encapsulation vs Abstraction (classic interview question):**
+| | Encapsulation | Abstraction |
+|---|---|---|
+| Focus | Hiding **data** (state) | Hiding **implementation complexity** (behavior details) |
+| Achieved via | Access modifiers | Abstract classes, interfaces |
+| Goal | Protect internal state / invariants | Reduce complexity for the consumer, define contracts |
+| Analogy | Capsule/pill hides ingredients | Car pedals hide the combustion/engine process |
+
+```java
+interface PaymentProcessor {
+    void pay(double amount); // WHAT, not HOW
+}
+
+class StripeProcessor implements PaymentProcessor {
+    public void pay(double amount) {
+        // complex API calls, retries, tokenization — all hidden
+        System.out.println("Charged $" + amount + " via Stripe");
+    }
+}
+```
+A caller using `PaymentProcessor` doesn't need to know about Stripe's SDK, retries, or network calls — that's abstraction.
+
+**Interview trap:** People often say "abstraction and encapsulation are the same." Be ready to articulate the distinction crisply as above — this is one of the most-asked conceptual OOP questions.
+
+---
+
+## 4. Inheritance
+
+**Definition:** A mechanism where a class (subclass/derived class) acquires the fields and methods of another class (superclass/base class), enabling code reuse and establishing an **is-a** relationship.
+
+```java
+class Animal {
+    protected String name;
+    public Animal(String name) { this.name = name; }
+    public void eat() { System.out.println(name + " is eating"); }
+}
+
+class Dog extends Animal {
+    public Dog(String name) { super(name); }
+    public void bark() { System.out.println(name + " says Woof"); }
+}
+
+Dog d = new Dog("Rex");
+d.eat();  // inherited
+d.bark(); // own method
+```
+
+**Types of inheritance:**
+- **Single**: One subclass, one superclass.
+- **Multilevel**: A → B → C (chain).
+- **Hierarchical**: One superclass, multiple subclasses.
+- **Multiple**: A class inherits from more than one class directly. **Not supported for classes in Java/C#** (diamond problem — ambiguity about which parent's method/field wins) but supported in C++ and achievable via multiple interfaces in Java/C#.
+- **Hybrid**: Combination of the above.
+
+**The Diamond Problem:**
+```
+      A
+     / \
+    B   C
+     \ /
+      D
+```
+If B and C both override a method from A differently, and D inherits from both, which version does D get? C++ resolves this with virtual inheritance; Java/C# sidestep it entirely by disallowing multiple class inheritance (only multiple *interface* implementation, and default methods require explicit resolution if there's a clash).
+
+**`super` keyword:** Refers to the immediate parent class; used to call parent constructors (`super(...)`) or parent methods (`super.method()`) that have been overridden.
+
+**Interview traps:**
+- Inheritance breaks encapsulation *slightly* because subclasses can depend on (and be broken by) the internal implementation of the base class — known as the **fragile base class problem**.
+- Overusing inheritance for code reuse (rather than true is-a relationships) is a classic anti-pattern — this is exactly why "favor composition over inheritance" (Section 6) is a famous design principle.
+- **Constructors are not inherited.** Subclasses must define their own (or use default) and can call the parent's via `super()`.
+- Private members are **not inherited/accessible** directly by subclasses (though they exist in memory) — only public/protected (and package-private, in Java, within the same package).
+
+---
+
+## 5. Polymorphism
+
+**Definition:** "Many forms" — the ability of different objects to respond to the same interface/method call in different ways.
+
+### 5a. Compile-time (Static) Polymorphism — Method Overloading
+Same method name, different parameter lists (type, number, or order), resolved at **compile time**.
+```java
+class Calculator {
+    int add(int a, int b) { return a + b; }
+    double add(double a, double b) { return a + b; }
+    int add(int a, int b, int c) { return a + b + c; }
+}
+```
+- Return type alone **cannot** distinguish overloads.
+- Also called "early binding."
+
+### 5b. Runtime (Dynamic) Polymorphism — Method Overriding
+A subclass provides its own implementation of a method already defined in its superclass, with the **same signature**. Resolved at **runtime** based on the actual object type (not the reference type) via **dynamic dispatch** (vtable lookup in most languages).
+
+```java
+class Shape {
+    double area() { return 0; }
+}
+class Circle extends Shape {
+    double radius;
+    Circle(double r) { radius = r; }
+    @Override
+    double area() { return Math.PI * radius * radius; }
+}
+class Square extends Shape {
+    double side;
+    Square(double s) { side = s; }
+    @Override
+    double area() { return side * side; }
+}
+
+Shape[] shapes = { new Circle(2), new Square(3) };
+for (Shape s : shapes) {
+    System.out.println(s.area()); // correct override called at runtime
+}
+```
+
+**Rules for valid overriding:**
+- Same method name, same parameters, same (or covariant) return type.
+- Access modifier can't be more restrictive than the parent's.
+- Can't override `static`, `final`, or `private` methods (static methods are *hidden*, not overridden — different concept).
+
+**Overloading vs Overriding — classic table:**
+| | Overloading | Overriding |
+|---|---|---|
+| Binding | Compile-time (static) | Runtime (dynamic) |
+| Signature | Must differ | Must be identical |
+| Relationship | Same class (or subclass adding new overloads) | Parent-child classes |
+| Purpose | Convenience/multiple ways to call | Specialize/change behavior |
+
+### 5c. Parametric Polymorphism (Generics)
+Writing code that works across types without knowing them in advance.
+```java
+class Box<T> {
+    private T value;
+    public void set(T value) { this.value = value; }
+    public T get() { return value; }
+}
+```
+
+**Interview trap:** Explain *how* dynamic dispatch works under the hood — most languages use a **vtable (virtual method table)**: each object carries a pointer to its class's vtable, and calling an overridden method looks up the correct implementation via that table at runtime. This is what makes runtime polymorphism possible.
+
+---
+
+## 6. Composition vs Inheritance
+
+**"Favor composition over inheritance"** is one of the most quoted OOP design principles (from the Gang of Four).
+
+**Inheritance ("is-a"):**
+```java
+class Bird {
+    void fly() { ... }
+}
+class Penguin extends Bird { } // Penguin IS-A Bird, but can't fly! Violates LSP.
+```
+
+**Composition ("has-a"):** Build complex behavior by combining simpler objects rather than inheriting.
+```java
+interface FlyBehavior { void fly(); }
+class CanFly implements FlyBehavior { public void fly() { System.out.println("Flying"); } }
+class CannotFly implements FlyBehavior { public void fly() { System.out.println("Can't fly"); } }
+
+class Bird {
+    private FlyBehavior flyBehavior;
+    Bird(FlyBehavior fb) { this.flyBehavior = fb; }
+    void performFly() { flyBehavior.fly(); }
+}
+
+Bird penguin = new Bird(new CannotFly());
+Bird sparrow = new Bird(new CanFly());
+```
+
+**Why composition is often preferred:**
+| | Inheritance | Composition |
+|---|---|---|
+| Coupling | Tight (subclass depends on parent internals) | Loose (depends only on interface) |
+| Flexibility | Fixed at compile time | Can change behavior at runtime (swap the composed object) |
+| Reuse across hierarchies | Hard (single inheritance limits) | Easy (mix and match objects) |
+| Risk | Fragile base class problem | Slightly more boilerplate/indirection |
+
+This is literally the core idea behind the **Strategy Pattern** (Section 2 in the roadmap) — composition-based behavior swapping.
+
+**When inheritance IS appropriate:** When there's a genuine, stable "is-a" relationship and you want to leverage polymorphism (e.g., `Circle is-a Shape`, `Dog is-a Animal`) — not merely to reuse code.
+
+---
+
+## 7. Association, Aggregation, Composition
+
+These describe **relationships between classes/objects**, increasing in strength:
+
+### Association
+A general relationship where objects know about and use each other, but neither owns the other. Can be one-to-one, one-to-many, many-to-many.
+```java
+class Teacher { }
+class Student {
+    Teacher teacher; // Student is associated with Teacher
+}
+```
+
+### Aggregation ("has-a", weak ownership)
+A "whole-part" relationship where the part **can exist independently** of the whole. If the whole is destroyed, the parts survive.
+```java
+class Department {
+    List<Professor> professors; // Professors exist even if Department is dissolved
+}
+```
+Represented in UML with a **hollow diamond**.
+
+### Composition ("has-a", strong/exclusive ownership)
+A "whole-part" relationship where the part **cannot exist independently** of the whole — its lifecycle is bound to the parent. If the whole is destroyed, the parts are destroyed too.
+```java
+class House {
+    private final Room[] rooms; // Rooms don't exist outside a House; created/destroyed with it
+    House() { rooms = new Room[]{ new Room() }; }
+}
+```
+Represented in UML with a **filled/solid diamond**.
+
+**Quick distinguishing question:** *"Can the part outlive the whole?"*
+- Yes → Aggregation (e.g., `Car` has `Engine`... actually depends on design; classic example: `University` has `Departments` — departments could be reassigned).
+- No → Composition (e.g., `House` has `Rooms` — a room doesn't exist without the house; `Order` has `OrderLineItems`).
+
+**Note on naming confusion:** "Composition vs Inheritance" (Section 6) uses "composition" loosely to mean *any* object containing another (association/aggregation/composition all count as "composition" in that broader design-principle sense). In UML/data-modeling contexts, "Composition" specifically means the strong-ownership case. Interviewers sometimes test if you know this nuance.
+
+---
+
+## 8. Interfaces
+
+**Definition:** A fully abstract contract that specifies **what** methods a class must implement, without providing implementation (traditionally). A class can implement multiple interfaces, enabling a form of "multiple inheritance of type."
+
+```java
+interface Drivable {
+    void drive();
+}
+interface Flyable {
+    void fly();
+}
+class FlyingCar implements Drivable, Flyable {
+    public void drive() { System.out.println("Driving"); }
+    public void fly() { System.out.println("Flying"); }
+}
+```
+
+**Modern nuance (Java 8+):** Interfaces can have `default` and `static` methods with implementations, blurring the line with abstract classes somewhat — but interfaces still can't hold instance state (no instance fields), which remains the key distinction.
+
+**Why interfaces matter:**
+- Enable **loose coupling** — code depends on an interface (contract), not a concrete implementation → easy to swap implementations (e.g., swap `MySQLRepository` for `PostgresRepository` without touching business logic).
+- Foundation of **Dependency Inversion Principle** (the "D" in SOLID).
+- Enable mocking in unit tests.
+
+**Interview trap:** *"Why use an interface if only one class implements it?"* — Still valuable for testability (mock implementations), future extensibility, and decoupling modules.
+
+---
+
+## 9. Abstract Classes
+
+**Definition:** A class that cannot be instantiated directly and may contain a mix of fully-implemented methods and abstract (unimplemented) methods that subclasses must override.
+
+```java
+abstract class Shape {
+    abstract double area(); // must be implemented by subclasses
+
+    // shared, concrete implementation
+    void printArea() {
+        System.out.println("Area: " + area());
+    }
+}
+class Rectangle extends Shape {
+    double w, h;
+    Rectangle(double w, double h) { this.w = w; this.h = h; }
+    double area() { return w * h; }
+}
+```
+
+### Interface vs Abstract Class — THE classic interview question
+
+| | Interface | Abstract Class |
+|---|---|---|
+| Instantiation | Never | Never |
+| Methods | Traditionally all abstract; now can have default/static (Java 8+) | Mix of abstract and concrete |
+| Fields | Only `public static final` constants | Any fields (instance state allowed) |
+| Multiple inheritance | A class can implement many | A class can extend only one |
+| Constructors | No | Yes (called via subclass constructor) |
+| Access modifiers on methods | Implicitly public | Can be public/protected/private (for helper methods) |
+| Use case | Define a **contract**/capability (unrelated classes can share it, e.g. `Comparable`) | Share **common code** among closely related classes (a base template) |
+| Relationship implied | "Can-do" (capability, e.g. `Flyable`) | "Is-a" (identity, e.g. `Animal`) |
+
+**Rule of thumb to state in interviews:** *Use an interface to define a **capability** that unrelated classes might share (e.g., `Serializable`, `Comparable`). Use an abstract class to provide a **common base implementation** for closely related classes that share state and behavior.*
+
+---
+
+## 10. SOLID Principles
+
+The five foundational OOP design principles (Robert C. Martin). Extremely commonly asked — be ready to explain each with a violation example AND a fix.
+
+### S — Single Responsibility Principle (SRP)
+*A class should have only one reason to change.*
+
+❌ Violation:
+```java
+class Employee {
+    void calculatePay() { ... }
+    void saveToDatabase() { ... }   // persistence concern mixed with business logic
+    void generateReport() { ... }   // reporting concern mixed in too
+}
+```
+✅ Fix: Split into `Employee`, `PayCalculator`, `EmployeeRepository`, `ReportGenerator`.
+
+### O — Open/Closed Principle (OCP)
+*Software entities should be open for extension, but closed for modification.*
+
+❌ Violation:
+```java
+class AreaCalculator {
+    double calculate(Object shape) {
+        if (shape instanceof Circle) { ... }
+        else if (shape instanceof Square) { ... }
+        // every new shape requires editing this method
+    }
+}
+```
+✅ Fix: Use polymorphism — each `Shape` subclass implements its own `area()`; `AreaCalculator` just calls `shape.area()`. Adding a new shape means adding a new class, not modifying existing code.
+
+### L — Liskov Substitution Principle (LSP)
+*Subtypes must be substitutable for their base types without altering correctness.* If `S` is a subtype of `T`, objects of type `T` should be replaceable with objects of type `S` without breaking the program.
+
+❌ Classic violation — the Rectangle/Square problem:
+```java
+class Rectangle {
+    protected int width, height;
+    void setWidth(int w) { width = w; }
+    void setHeight(int h) { height = h; }
+    int area() { return width * height; }
+}
+class Square extends Rectangle {
+    @Override void setWidth(int w) { width = w; height = w; } // breaks expectation!
+    @Override void setHeight(int h) { width = h; height = h; }
+}
+// Code that assumes setWidth/setHeight are independent breaks when given a Square
+```
+✅ Fix: Don't force `Square` to inherit `Rectangle`; both implement a common `Shape` interface, or avoid mutable shared setters entirely.
+
+### I — Interface Segregation Principle (ISP)
+*Clients should not be forced to depend on methods they don't use. Prefer many small, specific interfaces over one large general-purpose interface.*
+
+❌ Violation:
+```java
+interface Worker {
+    void work();
+    void eat();
+}
+class Robot implements Worker {
+    public void work() { ... }
+    public void eat() { throw new UnsupportedOperationException(); } // Robots don't eat!
+}
+```
+✅ Fix: Split into `Workable` and `Eatable` interfaces; `Robot` implements only `Workable`.
+
+### D — Dependency Inversion Principle (DIP)
+*High-level modules should not depend on low-level modules; both should depend on abstractions. Abstractions should not depend on details; details should depend on abstractions.*
+
+❌ Violation:
+```java
+class MySQLDatabase { void save(String data) { ... } }
+class UserService {
+    private MySQLDatabase db = new MySQLDatabase(); // tightly coupled to concrete class
+}
+```
+✅ Fix:
+```java
+interface Database { void save(String data); }
+class MySQLDatabase implements Database { public void save(String data) { ... } }
+class UserService {
+    private Database db; // depends on abstraction
+    UserService(Database db) { this.db = db; } // dependency injection
+}
+```
+
+**Interview tip:** Interviewers love asking "give me a real code example that violates X and how you'd fix it" — practice writing these from memory, not just reciting definitions.
+
+---
+
+## 11. Coupling / Cohesion
+
+**Coupling:** The degree of interdependence between modules/classes. **Low coupling** is desirable — modules should know as little as possible about each other's internals.
+- *Tight coupling* example: Class A directly instantiates and calls concrete methods of Class B's internals; a change in B breaks A.
+- *Loose coupling* example: Class A depends only on an interface that B implements (DIP).
+
+**Cohesion:** How closely related and focused the responsibilities of a single module/class are. **High cohesion** is desirable — a class should do one well-defined thing (ties directly to SRP).
+- *Low cohesion* example: A `Utils` "God class" with unrelated static methods (date formatting, email sending, tax calculation).
+- *High cohesion* example: A `TaxCalculator` class that only calculates tax.
+
+**Goal to state in interviews:** *"We want low coupling and high cohesion."* This minimizes ripple effects of changes and makes systems easier to understand, test, and maintain.
+
+```
+High Cohesion + Low Coupling = Good Design
+Low Cohesion + High Coupling = "Spaghetti code" / God classes
+```
+
+---
+
+## 12. Immutability
+
+**Definition:** An object whose state cannot be modified after creation. Any "modification" produces a new object instead.
+
+```java
+final class ImmutablePoint {
+    private final int x, y;
+    public ImmutablePoint(int x, int y) { this.x = x; this.y = y; }
+    public int getX() { return x; }
+    public int getY() { return y; }
+    // "Setter" returns a NEW object rather than mutating
+    public ImmutablePoint withX(int newX) { return new ImmutablePoint(newX, this.y); }
+}
+```
+
+**How to make a class immutable (checklist — commonly asked):**
+1. Declare the class `final` (prevent subclassing that could add mutability).
+2. Make all fields `private final`.
+3. No setters.
+4. If a field is a mutable object (e.g., a `List` or `Date`), do a **defensive copy** on both construction (input) and getter access (output), so external code can't mutate internal state through a returned reference.
+5. Initialize all fields in the constructor.
+
+**Why immutability matters:**
+- **Thread-safety**: immutable objects can be shared across threads without synchronization — no risk of race conditions on their state.
+- Easier to reason about (no unexpected side effects); safe to use as hash keys (state won't change and break the hash invariant), safe to cache/reuse.
+- Common examples: `String` in Java, tuples in Python, records in C#/Java.
+
+**Interview trap:** *"Is `final` alone enough to make a Java field immutable?"* No — `final` only prevents reassignment of the reference; if the field holds a mutable object (like a `List`), its *contents* can still change unless you also defensively copy and encapsulate access.
+
+---
+
+## 13. Exception Handling
+
+**Purpose:** Gracefully handle runtime errors without crashing the program, and separate error-handling logic from business logic.
+
+```java
+try {
+    int result = 10 / divisor;
+} catch (ArithmeticException e) {
+    System.out.println("Cannot divide by zero: " + e.getMessage());
+} finally {
+    System.out.println("Cleanup runs regardless of exception");
+}
+```
+
+**Checked vs Unchecked exceptions (Java-centric, but concept generalizes):**
+| | Checked | Unchecked (Runtime) |
+|---|---|---|
+| Compile-time enforcement | Must be declared (`throws`) or caught | No enforcement |
+| Example | `IOException`, `SQLException` | `NullPointerException`, `ArithmeticException`, `IllegalArgumentException` |
+| Represents | Recoverable, expected conditions (e.g., file not found) | Programming bugs / unexpected states |
+
+**Best practices (commonly probed in interviews):**
+- **Catch specific exceptions**, not generic `Exception` or `Throwable` — avoid swallowing unrelated errors.
+- **Never swallow exceptions silently** (empty catch block) — at minimum log them.
+- **Use `finally` (or try-with-resources)** to release resources (file handles, DB connections, sockets) even if an exception occurs.
+- **Fail fast**: validate inputs early and throw meaningful exceptions rather than letting bad state propagate.
+- **Custom exceptions**: create domain-specific exception classes (e.g., `InsufficientFundsException extends RuntimeException`) to make error handling expressive and catchable at the right layer.
+- **Don't use exceptions for normal control flow** — they're relatively expensive and meant for exceptional conditions, not routine logic branching.
+
+```java
+class InsufficientFundsException extends RuntimeException {
+    public InsufficientFundsException(String message) { super(message); }
+}
+
+class BankAccount {
+    private double balance;
+    void withdraw(double amount) {
+        if (amount > balance) {
+            throw new InsufficientFundsException("Balance too low for withdrawal of " + amount);
+        }
+        balance -= amount;
+    }
+}
+```
+
+**Try-with-resources (Java) / context managers (Python `with`) / RAII (C++):** Pattern for automatic resource cleanup, avoiding leaked file handles/connections even when exceptions occur. Worth mentioning as the "modern" preferred approach over manual `finally` blocks for resource management.
+
+---
+
+## 14. Practice Problems
+
+The roadmap lists four classic Low-Level Design (LLD) practice problems. For each, interviewers want you to demonstrate: identifying classes/entities, relationships (association/aggregation/composition), applying SOLID, and picking appropriate design patterns.
+
+### Parking Lot
+- **Entities:** `ParkingLot`, `ParkingFloor`, `ParkingSpot` (abstract, subclassed by size: `Compact`, `Large`, `Handicapped`), `Vehicle` (abstract: `Car`, `Motorcycle`, `Truck`), `Ticket`, `Payment`.
+- **Key design decisions:** Strategy pattern for spot-assignment algorithm (nearest spot vs. first available); Factory for creating the right spot/vehicle type; Observer for notifying when the lot is full.
+- **Relationships:** `ParkingLot` *has* `ParkingFloor`s (composition — floors don't exist without the lot); `ParkingFloor` *has* `ParkingSpot`s (composition).
+
+### Library Management System
+- **Entities:** `Library`, `Book` (catalog item), `BookCopy` (physical instance — important distinction!), `Member`, `Librarian`, `Loan/Checkout`, `Reservation`.
+- **Key design decisions:** Distinguish `Book` (metadata: title, author, ISBN) from `BookCopy` (a specific physical/lendable unit) — a common thing interviewers check for. Observer pattern for reservation notifications (notify a member when a reserved book becomes available).
+
+### ATM
+- **Entities:** `ATM`, `CardReader`, `CashDispenser`, `Screen`, `Keypad`, `Account`, `Transaction` (abstract: `Withdrawal`, `Deposit`, `BalanceInquiry`, `Transfer`), `Bank`.
+- **Key design decisions:** **State pattern** is the star here — ATM states like `IdleState`, `HasCardState`, `SelectOperationState`, `TransactionState` cleanly model the machine's behavior changing based on state, avoiding giant if/else chains. Chain of Responsibility can model cash dispensing across denominations (e.g., dispense $50s, then $20s, then $10s).
+
+### Elevator System
+- **Entities:** `Elevator`, `ElevatorController`, `Floor`, `Button` (internal/external, up/down), `Request`, `Door`.
+- **Key design decisions:** **State pattern** for elevator states (`Idle`, `MovingUp`, `MovingDown`, `DoorOpen`). **Strategy pattern** for the scheduling algorithm (e.g., SCAN/elevator algorithm — serve all requests in current direction before reversing, minimizing direction changes). Observer for notifying floor displays.
+
+**General interview approach for any LLD problem:**
+1. Clarify requirements/scope (functional + non-functional) — ask questions first, don't assume.
+2. Identify core entities/nouns → candidate classes.
+3. Identify relationships between them (association/aggregation/composition, inheritance where "is-a" is genuine).
+4. Define responsibilities per class (SRP).
+5. Identify where behavior varies → candidate for a design pattern (Strategy for interchangeable algorithms, State for state-dependent behavior, Observer for event notification, Factory for object creation logic).
+6. Write the core class skeletons/interfaces (not full implementations) with key method signatures.
+7. Discuss extensibility: "If we added X requirement, how would the design change?"
+
+---
+
+## 15. Rapid-Fire Interview Q&A
+
+**Q: What's the difference between an object and a class?**
+A class is a blueprint (type definition); an object is a runtime instance of that blueprint with its own state.
+
+**Q: Can you achieve polymorphism without inheritance?**
+Yes — via interfaces (a class implementing an interface exhibits polymorphism through that interface type), and via duck typing in dynamically-typed languages (Python, JS) where behavior is determined by the presence of a method, not class hierarchy.
+
+**Q: Why is multiple inheritance disallowed for classes in Java but allowed for interfaces?**
+To avoid the diamond problem's ambiguity around conflicting state/implementation from two parents. Interfaces (pre-Java 8) had no state or implementation, so there was nothing ambiguous to inherit; even with Java 8 default methods, conflicts must be explicitly resolved by the implementing class.
+
+**Q: What is dynamic binding / dynamic dispatch?**
+The mechanism (typically a vtable lookup) by which the correct overridden method implementation is selected at runtime based on the actual object type, not the reference/declared type.
+
+**Q: What happens if you call an overridden method from a constructor?**
+Dangerous pattern — the subclass's override executes before the subclass's own fields are initialized (since the base constructor runs first), which can lead to using uninitialized state. Generally considered a code smell to avoid.
+
+**Q: Is `this` a keyword or an object?**
+It's a reference to the current object instance, implicitly passed to instance methods.
+
+**Q: Difference between `==` and `.equals()` (Java) or `is` and `==` (Python)?**
+`==`/`is` compares reference identity (same object in memory); `.equals()`/`==` (Python) compares logical/value equality (which can be overridden). A classic gotcha for interviews.
+
+**Q: What's a "God class" / "God object"?**
+An anti-pattern where a single class accumulates too many responsibilities (low cohesion), becoming a bottleneck for changes and hard to test — directly violates SRP.
+
+**Q: Can a constructor be private? Why would you do that?**
+Yes — commonly used in the Singleton pattern (Section 2 of the roadmap) to prevent external instantiation, forcing object creation through a controlled static factory method.
+
+**Q: Is Python "purely" object-oriented?**
+Everything in Python is an object (including functions and classes themselves), but Python supports multi-paradigm programming (procedural, functional too) — it's not "pure" OOP like Smalltalk.
+
+---
+
+## Suggested Study Approach
+1. Read this doc once fully, then re-derive each definition from memory (active recall).
+2. Implement each of the 4 practice LLD problems from scratch in your primary interview language (aim for 45-60 min each, matching real interview time constraints).
+3. For SOLID, write one violation + fix pair per principle without looking at notes.
+4. Pair this with Section 2 (Design Patterns) since Strategy/Observer/Factory/State recur constantly in the LLD practice problems above.

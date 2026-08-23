@@ -1,0 +1,14 @@
+{
+  "title": "CS Fundamentals",
+  "pages": [
+    "index",
+    "oop",
+    "design-patterns",
+    "apis-http",
+    "databases",
+    "networking",
+    "dsa-complexity",
+    "operating-systems",
+    "security"
+  ]
+}

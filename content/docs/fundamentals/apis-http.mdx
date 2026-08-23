@@ -1,0 +1,690 @@
+---
+title: "APIs & HTTP"
+description: "Deep dive into REST, RPC, GraphQL, HTTP fundamentals, auth, and modern API design concerns — with concrete examples and the trade-off questions interviewers actually ask."
+---
+Deep dive into REST, RPC, GraphQL, HTTP fundamentals, auth, and modern API design concerns — with concrete examples and the trade-off questions interviewers actually ask.
+
+---
+
+## Table of Contents
+1. [REST](#1-rest)
+2. [RPC](#2-rpc)
+3. [GraphQL Basics](#3-graphql-basics)
+4. [CRUD](#4-crud)
+5. [HTTP Methods](#5-http-methods)
+6. [Status Codes](#6-status-codes)
+7. [Headers](#7-headers)
+8. [Cookies](#8-cookies)
+9. [Sessions](#9-sessions)
+10. [JWT](#10-jwt)
+11. [OAuth2 Basics](#11-oauth2-basics)
+12. [HTTPS/TLS](#12-httpstls)
+13. [Idempotency](#13-idempotency)
+14. [Pagination](#14-pagination)
+15. [Rate Limiting](#15-rate-limiting)
+16. [Caching](#16-caching)
+17. [Content Negotiation](#17-content-negotiation)
+18. [Webhooks](#18-webhooks)
+19. [WebSockets](#19-websockets)
+20. [SSE](#20-sse-server-sent-events)
+21. [API Versioning](#21-api-versioning)
+22. [OpenAPI/Swagger](#22-openapiswagger)
+23. [Rapid-Fire Interview Q&A](#23-rapid-fire-interview-qa)
+
+---
+
+## 1. REST
+
+**REST (REpresentational State Transfer)** is an architectural style (not a protocol) for designing networked APIs, defined by Roy Fielding. It treats everything as a **resource**, identified by a URI, manipulated via standard HTTP methods.
+
+**Six architectural constraints (know these — commonly asked):**
+1. **Client-Server**: Separation of concerns; UI and data storage evolve independently.
+2. **Statelessness**: Each request contains all information needed to process it; server holds no client session state between requests.
+3. **Cacheability**: Responses must define themselves as cacheable or not, to improve performance.
+4. **Uniform Interface**: Consistent resource identification (URIs), manipulation via representations, self-descriptive messages, HATEOAS.
+5. **Layered System**: Client can't tell if it's connected directly to the server or through intermediaries (proxies, load balancers, gateways).
+6. **Code on Demand** (optional): Server can extend client functionality by sending executable code (e.g., JavaScript) — rarely used in practice.
+
+**HATEOAS (Hypermedia As The Engine Of Application State):** Truly RESTful responses include links to related actions/resources, so clients navigate the API dynamically rather than hardcoding URLs.
+```json
+{
+  "id": 42,
+  "status": "pending",
+  "links": [
+    { "rel": "cancel", "href": "/orders/42/cancel", "method": "POST" },
+    { "rel": "self", "href": "/orders/42" }
+  ]
+}
+```
+**Interview trap:** Most "REST APIs" in the wild (including most job interviews' assumptions) are actually **RESTful/REST-ish** — they use resource URIs and HTTP verbs but skip HATEOAS. Be ready to say this: true REST per Fielding's dissertation requires HATEOAS; most production APIs are pragmatic subsets.
+
+**Good REST URI design:**
+```
+GET    /users            → list users
+GET    /users/123        → get user 123
+POST   /users             → create a user
+PUT    /users/123        → replace user 123
+PATCH  /users/123        → partially update user 123
+DELETE /users/123        → delete user 123
+GET    /users/123/orders → nested resource: orders belonging to user 123
+```
+- Use **nouns**, not verbs, in URIs (`/users`, not `/getUsers`).
+- Use plural nouns consistently (`/users` not `/user`).
+- Use nesting for clear ownership, but avoid excessive depth (`/users/1/orders/2/items/3/reviews` — too deep; consider flattening with query params or separate top-level resources).
+
+---
+
+## 2. RPC
+
+**RPC (Remote Procedure Call)** lets a client invoke a function/procedure on a remote server as if it were a local function call, hiding the network communication details. Focuses on **actions/operations**, not resources.
+
+```
+POST /createUser
+POST /calculateShippingCost
+POST /rebootServer
+```
+
+**REST vs RPC (classic interview question):**
+| | REST | RPC |
+|---|---|---|
+| Paradigm | Resource-oriented (nouns) | Action-oriented (verbs) |
+| URI style | `/orders/123` | `/getOrder`, `/cancelOrder` |
+| HTTP verbs | Meaningfully used (GET/POST/PUT/DELETE) | Often just POST for everything |
+| Statelessness | Core constraint | Not inherently required |
+| Best for | CRUD-heavy, resource-centric domains | Action-heavy operations that don't map cleanly to CRUD (e.g., "reindex search", "trigger batch job") |
+
+**Modern RPC implementations:**
+- **gRPC** (Google): Uses HTTP/2 + Protocol Buffers (binary serialization) for high-performance, strongly-typed RPC; supports streaming (unary, server-streaming, client-streaming, bidirectional). Popular for internal microservice-to-microservice communication.
+- **JSON-RPC**: Simple RPC over JSON, method name + params in the request body.
+- **SOAP** (older): XML-based, RPC-style, with heavy standards (WS-Security, WS-Addressing) — largely legacy now, still seen in enterprise/banking/government systems.
+
+**Interview trap:** *"Is gRPC RESTful?"* No — gRPC is explicitly RPC-style (action/method-oriented, e.g. `GetUser`, `CreateOrder` as defined in a `.proto` file), not resource-oriented, and it doesn't follow REST's uniform interface constraint.
+
+---
+
+## 3. GraphQL Basics
+
+**GraphQL** is a query language and runtime for APIs (developed by Facebook) that lets clients specify **exactly what data they need** in a single request, rather than being locked into server-defined response shapes.
+
+```graphql
+# Client asks for exactly these fields, nothing more
+query {
+  user(id: 42) {
+    name
+    email
+    orders(limit: 5) {
+      id
+      total
+    }
+  }
+}
+```
+
+**Core concepts:**
+- **Schema**: Strongly-typed contract defining available types, queries, mutations, subscriptions.
+- **Query**: Read operation.
+- **Mutation**: Write operation (create/update/delete).
+- **Subscription**: Real-time updates via a persistent connection (often WebSocket-based).
+- **Resolvers**: Server-side functions that fetch the data for each field in the schema.
+
+**GraphQL vs REST (very common interview question):**
+| | REST | GraphQL |
+|---|---|---|
+| Endpoints | Multiple (one per resource) | Single endpoint (typically `/graphql`) |
+| Over-fetching | Common (fixed response shape may include unneeded fields) | Solved — client specifies exact fields |
+| Under-fetching | Common (may need multiple round-trips for related data, e.g., N+1 client-side calls) | Solved — nested queries fetch related data in one request |
+| Caching | Simple (HTTP caching works naturally via URLs) | Harder (single endpoint, POST-based typically; needs custom caching like Apollo's normalized cache) |
+| Learning curve | Lower, widely understood | Higher (schema design, resolvers, N+1 backend problem) |
+| File uploads | Native (multipart/form-data) | Awkward (not natively supported, needs extensions) |
+
+**GraphQL's own N+1 problem:** If a query fetches 100 users, each with a resolver that individually queries for their orders, that's 100 separate DB calls. Solved with the **DataLoader pattern** — batches and caches requests within a single tick.
+
+**Interview trap:** GraphQL doesn't replace HTTP semantics (status codes, caching, etc.) — it typically returns `200 OK` even for application-level errors, with errors reported in an `errors` field in the JSON body. This surprises engineers coming from REST.
+
+---
+
+## 4. CRUD
+
+**CRUD** = **C**reate, **R**ead, **U**pdate, **D**elete — the four basic persistent-storage operations, and the backbone of most REST API design.
+
+| Operation | HTTP Method | SQL Equivalent |
+|---|---|---|
+| Create | `POST` | `INSERT` |
+| Read | `GET` | `SELECT` |
+| Update | `PUT` / `PATCH` | `UPDATE` |
+| Delete | `DELETE` | `DELETE` |
+
+**Interview trap:** Not every API operation maps cleanly to CRUD (e.g., "transfer funds between accounts," "approve a request") — these are better modeled as RPC-style actions (`POST /accounts/1/transfer`) layered on top of a mostly-CRUD/REST design. Be ready to discuss this hybrid reality.
+
+---
+
+## 5. HTTP Methods
+
+| Method | Purpose | Idempotent? | Safe? | Has Body? |
+|---|---|---|---|---|
+| `GET` | Retrieve a resource | Yes | Yes | No (by convention) |
+| `POST` | Create a resource / trigger an action | No | No | Yes |
+| `PUT` | Replace a resource entirely | Yes | No | Yes |
+| `PATCH` | Partially update a resource | No* | No | Yes |
+| `DELETE` | Remove a resource | Yes | No | Usually no |
+| `HEAD` | Like GET but returns headers only, no body | Yes | Yes | No |
+| `OPTIONS` | Discover allowed methods/CORS preflight | Yes | Yes | No |
+
+*`PATCH` is not guaranteed idempotent in general (e.g., a `PATCH` that says "increment counter by 1" is not idempotent), though many practical implementations design it to be.
+
+**Safe vs Idempotent (frequently confused — important distinction):**
+- **Safe**: Doesn't modify server state at all (read-only) — `GET`, `HEAD`, `OPTIONS`.
+- **Idempotent**: Making the same request multiple times produces the same server state as making it once (though the response might differ, e.g., a second `DELETE` might return 404 instead of 200, but the *end state* — resource gone — is the same).
+
+**PUT vs PATCH (classic interview question):**
+```
+PUT /users/123
+{ "name": "Alice", "email": "alice@x.com", "age": 30 }  // full replacement — omitted fields may be reset/removed
+
+PATCH /users/123
+{ "age": 31 }  // partial update — only this field changes
+```
+
+---
+
+## 6. Status Codes
+
+Grouped by first digit:
+
+### 1xx — Informational
+- `100 Continue` — client should continue sending the request body.
+
+### 2xx — Success
+- `200 OK` — generic success.
+- `201 Created` — resource created (typically returned by `POST`, often with a `Location` header pointing to the new resource).
+- `202 Accepted` — request accepted for async processing, not yet complete.
+- `204 No Content` — success, but no body to return (common for `DELETE`).
+
+### 3xx — Redirection
+- `301 Moved Permanently` — resource permanently at a new URI.
+- `302 Found` — temporary redirect.
+- `304 Not Modified` — cached version is still valid (used with `ETag`/`If-None-Match`, see Caching section).
+
+### 4xx — Client Errors
+- `400 Bad Request` — malformed request (validation failure).
+- `401 Unauthorized` — **not authenticated** (misleading name — really means "unauthenticated"; you don't know who the caller is).
+- `403 Forbidden` — authenticated, but **not authorized** (caller is known, but lacks permission).
+- `404 Not Found` — resource doesn't exist.
+- `405 Method Not Allowed` — HTTP method not supported for this resource.
+- `409 Conflict` — request conflicts with current state (e.g., version mismatch, duplicate resource).
+- `422 Unprocessable Entity` — syntactically correct but semantically invalid (e.g., valid JSON but fails business validation).
+- `429 Too Many Requests` — rate limit exceeded (see Rate Limiting section).
+
+### 5xx — Server Errors
+- `500 Internal Server Error` — generic server-side failure.
+- `502 Bad Gateway` — an upstream server returned an invalid response (common in proxy/load-balancer setups).
+- `503 Service Unavailable` — server temporarily overloaded/down (e.g., during deploys, maintenance).
+- `504 Gateway Timeout` — upstream server didn't respond in time.
+
+**Interview trap:** *"401 vs 403 — which is which?"* Extremely commonly asked and commonly mixed up. Mnemonic: **401 = "Who are you?"** (authentication problem), **403 = "I know who you are, but you can't do that"** (authorization problem).
+
+---
+
+## 7. Headers
+
+HTTP headers carry metadata about the request/response, separate from the body.
+
+**Common request headers:**
+- `Authorization: Bearer <token>` — auth credentials.
+- `Content-Type: application/json` — format of the request body.
+- `Accept: application/json` — format(s) the client can handle in the response (see Content Negotiation).
+- `User-Agent` — identifies the client software.
+- `If-None-Match` / `If-Modified-Since` — conditional request headers for caching.
+- `X-Request-ID` — custom header for request tracing/correlation across services.
+
+**Common response headers:**
+- `Content-Type` — format of the response body.
+- `Cache-Control` — caching directives (see Caching section).
+- `ETag` — a version identifier/fingerprint for the resource, used for cache validation.
+- `Location` — the URI of a newly created resource (with `201 Created`).
+- `Set-Cookie` — instructs the client to store a cookie.
+- `Access-Control-Allow-Origin` — CORS header, controls which origins may access the resource cross-origin.
+
+**CORS (Cross-Origin Resource Sharing) — commonly probed:** A browser security mechanism that blocks JavaScript from making requests to a different origin (scheme+host+port) than the page was served from, unless the server explicitly allows it via `Access-Control-Allow-Origin` and related headers. For non-simple requests (custom headers, non-GET/POST methods), the browser first sends an `OPTIONS` **preflight** request to check permissions before sending the actual request.
+
+---
+
+## 8. Cookies
+
+**Cookies** are small key-value pairs sent by the server (`Set-Cookie` header) and stored by the browser, automatically re-sent by the browser on subsequent requests to the same domain.
+
+```
+Set-Cookie: sessionId=abc123; HttpOnly; Secure; SameSite=Strict; Max-Age=3600
+```
+
+**Key attributes (commonly asked):**
+- `HttpOnly` — cookie inaccessible to JavaScript (`document.cookie`), mitigating XSS-based cookie theft.
+- `Secure` — cookie only sent over HTTPS.
+- `SameSite` — controls cross-site sending: `Strict` (never sent cross-site), `Lax` (sent on top-level navigation, default in modern browsers), `None` (always sent, requires `Secure`) — a key CSRF mitigation.
+- `Max-Age` / `Expires` — lifetime of the cookie.
+- `Domain` / `Path` — scope of where the cookie is sent.
+
+**Use cases:** Session identifiers, tracking/analytics, user preferences, "remember me" tokens.
+
+---
+
+## 9. Sessions
+
+**Session-based authentication:** After login, the server creates a session record (typically in memory, Redis, or a DB) keyed by a session ID, and sends that ID to the client via a cookie. On each subsequent request, the client sends the cookie back, and the server looks up the session to identify the user.
+
+```
+Client login → Server creates session { id: "sess_123", userId: 42 } stored server-side
+             → Server responds: Set-Cookie: sessionId=sess_123
+Client's next request → Cookie: sessionId=sess_123
+             → Server looks up session store, finds userId 42, treats request as authenticated
+```
+
+**Session vs Token (JWT) authentication (classic interview question):**
+| | Session-based | Token-based (JWT) |
+|---|---|---|
+| State | **Stateful** — server stores session data | **Stateless** — server verifies signature only, no storage needed |
+| Scalability | Requires shared session store (e.g., Redis) across servers in a distributed setup, or sticky sessions | Scales horizontally trivially — any server can verify the token |
+| Revocation | Easy — just delete the session server-side | Hard — token valid until expiry unless you maintain a blocklist (which reintroduces state) |
+| Storage | Session ID in a cookie | Token in cookie, local storage, or Authorization header |
+| Typical use | Traditional web apps | APIs, mobile apps, microservices, SPAs |
+
+This statelessness trade-off directly ties back to REST's statelessness constraint (Section 1) — pure REST favors token-based auth since it avoids server-side session state.
+
+---
+
+## 10. JWT
+
+**JWT (JSON Web Token)** is a compact, URL-safe, self-contained token format for representing claims between two parties, digitally signed so its integrity can be verified.
+
+**Structure:** `header.payload.signature` (Base64URL-encoded, dot-separated)
+```
+eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c
+```
+- **Header**: algorithm + token type, e.g. `{"alg": "HS256", "typ": "JWT"}`.
+- **Payload**: claims — data about the user/session, e.g. `{"sub": "1234567890", "name": "John Doe", "exp": 1716239022}`.
+- **Signature**: `HMACSHA256(base64UrlEncode(header) + "." + base64UrlEncode(payload), secret)` — allows the server to verify the token hasn't been tampered with.
+
+**Important nuance:** The payload is only **Base64-encoded, not encrypted** — anyone can decode and read it (e.g., on jwt.io). **Never put sensitive data (passwords, secrets) in a JWT payload.** The signature only guarantees *integrity* (it wasn't tampered with), not *confidentiality*.
+
+**Common claims:** `sub` (subject/user ID), `iat` (issued at), `exp` (expiration), `iss` (issuer), `aud` (audience).
+
+**Signing algorithms:**
+- **HS256** (HMAC + SHA-256): symmetric — same secret key used to sign and verify. Simpler but the verifying party must have the same secret (risky if many services need to verify).
+- **RS256** (RSA + SHA-256): asymmetric — private key signs, public key verifies. Better for distributed systems: the auth server keeps the private key; any service can verify with the public key without being able to forge tokens.
+
+**JWT security pitfalls (commonly probed):**
+- **`alg: none` attack**: Some old JWT libraries accepted tokens with `alg: none`, allowing attackers to forge unsigned tokens. Always explicitly whitelist expected algorithms when verifying.
+- **Revocation problem**: Since JWTs are stateless/self-contained, there's no built-in way to invalidate a token before its `exp` — mitigations include short expiry + refresh tokens, or maintaining a server-side blocklist (which sacrifices statelessness).
+- **Storage**: Storing JWTs in `localStorage` exposes them to XSS attacks (any injected script can read them); storing in an `HttpOnly` cookie avoids that but reintroduces CSRF risk (mitigated via `SameSite`).
+
+**Refresh token pattern:** Use a short-lived **access token** (JWT, e.g., 15 min) for API calls, and a longer-lived **refresh token** (often opaque, stored server-side so it's revocable) to obtain new access tokens without re-login.
+
+---
+
+## 11. OAuth2 Basics
+
+**OAuth2** is an **authorization** framework (not authentication — that's OpenID Connect, built on top of OAuth2) that lets a third-party application access a user's resources on another service **without the user sharing their password** with that third party.
+
+**Key roles:**
+- **Resource Owner**: the user.
+- **Client**: the third-party app requesting access (e.g., "Login with Google" integration).
+- **Authorization Server**: issues tokens after the user authenticates and consents (e.g., Google's OAuth server).
+- **Resource Server**: hosts the protected resource/API (e.g., Google's API serving the user's profile data).
+
+**Authorization Code Flow (most common, most secure — know this well):**
+1. Client redirects user to the Authorization Server's login/consent screen.
+2. User logs in and approves requested scopes (e.g., "read your email").
+3. Authorization Server redirects back to the client with a short-lived **authorization code**.
+4. Client's backend exchanges this code (plus a client secret) for an **access token** (and often a refresh token) via a server-to-server call.
+5. Client uses the access token to call the Resource Server's API on the user's behalf.
+
+**Why the extra "code" step instead of returning the token directly?** The code is exchanged for a token via a back-channel (server-to-server) call that includes the client secret — this keeps the actual access token out of the browser's URL/history, reducing exposure risk.
+
+**Other OAuth2 grant types (worth knowing names + when used):**
+- **Implicit Flow**: Token returned directly in the redirect URL — legacy, discouraged now (token exposed in browser history/logs); mostly replaced by Authorization Code + PKCE.
+- **Client Credentials Flow**: Machine-to-machine auth (no user involved) — a service authenticates as itself using its own client ID/secret.
+- **PKCE (Proof Key for Code Exchange)**: Extension to Authorization Code flow for public clients (mobile/SPA apps that can't safely store a client secret) — adds a dynamically generated code verifier/challenge to prevent authorization code interception attacks.
+
+**OAuth2 vs JWT (common point of confusion):** OAuth2 is a *protocol/framework* for delegated authorization; JWT is a *token format* that OAuth2 implementations often use to represent the access/ID tokens — they're not competing concepts, JWT is frequently the token format used *within* an OAuth2 flow.
+
+**OAuth2 vs OpenID Connect (OIDC):** OAuth2 answers "what can this app do on my behalf?" (authorization). OIDC is a thin identity layer on top of OAuth2 that answers "who is this user?" (authentication), adding a standardized `id_token` (a JWT containing user identity claims).
+
+---
+
+## 12. HTTPS/TLS
+
+**HTTPS** = HTTP over **TLS (Transport Layer Security)**, providing:
+- **Confidentiality**: data encrypted in transit, unreadable to eavesdroppers.
+- **Integrity**: data can't be tampered with in transit without detection.
+- **Authentication**: verifies the server (and optionally client) identity via certificates.
+
+**TLS Handshake (simplified, commonly asked to explain):**
+1. **Client Hello**: client sends supported TLS versions, cipher suites, a random number.
+2. **Server Hello**: server picks a cipher suite, sends its **certificate** (containing its public key, signed by a trusted Certificate Authority) and a random number.
+3. **Key Exchange**: client verifies the certificate against trusted CAs, then both sides derive a shared **symmetric session key** (via asymmetric key exchange, e.g., Diffie-Hellman in modern TLS).
+4. **Finished**: both sides switch to encrypted communication using the symmetric session key for the rest of the connection.
+
+**Why symmetric encryption for the actual data, not asymmetric?** Asymmetric (public/private key) encryption is computationally expensive; it's used only briefly to securely establish a shared symmetric key, after which fast symmetric encryption (e.g., AES) handles the bulk data transfer.
+
+**Certificate Authority (CA) chain of trust:** Browsers/OS ship with a list of trusted root CAs. A server's certificate is validated by checking it was signed by a trusted CA (or a chain leading to one) — this is how the client trusts it's really talking to the claimed server, preventing man-in-the-middle attacks.
+
+**TLS 1.3 improvements over 1.2 (worth mentioning if asked):** Fewer round-trips in the handshake (faster connection setup), removed support for weak/legacy cipher suites, forward secrecy enforced by default.
+
+---
+
+## 13. Idempotency
+
+**Definition:** An operation is idempotent if performing it multiple times has the same effect as performing it once (see the HTTP Methods table above for which verbs are idempotent by spec).
+
+**Why it matters in distributed systems:** Networks are unreliable — a client might send a request, not receive the response (timeout), and retry. If the operation isn't idempotent, a retry could cause duplicate effects (e.g., double-charging a customer).
+
+**Idempotency keys (common real-world pattern, frequently asked in system design + API interviews):**
+```
+POST /payments
+Idempotency-Key: 550e8400-e29b-41d4-a716-446655440000
+{ "amount": 100, "currency": "USD" }
+```
+The client generates a unique key per logical operation (not per HTTP attempt). The server stores the key alongside the result of the first successful processing; if it sees the same key again (a retry), it returns the **stored result** instead of re-processing the payment — even though `POST` is not idempotent by default, this pattern makes the *operation* idempotent.
+
+**Interview trap:** *"Is `POST` always non-idempotent?"* By the HTTP spec, yes, `POST` has no idempotency guarantee. But in practice, using idempotency keys (as above) is the standard way to make POST-based operations (like payments) safe to retry — a very commonly asked system-design detail (Stripe's API is the textbook real-world example).
+
+---
+
+## 14. Pagination
+
+Returning large result sets in manageable chunks rather than all at once.
+
+### Offset-based pagination
+```
+GET /users?offset=40&limit=20
+```
+- Simple to implement (`LIMIT`/`OFFSET` in SQL).
+- **Problem**: performance degrades on large offsets (DB must scan/skip all preceding rows); **inconsistent results** if rows are inserted/deleted between page requests (items can shift, causing skips or duplicates).
+
+### Cursor-based (keyset) pagination
+```
+GET /users?after=user_12345&limit=20
+```
+The cursor is typically an opaque encoded pointer to the last seen item (often based on a unique, sortable column like `id` or `created_at`).
+```sql
+SELECT * FROM users WHERE id > 12345 ORDER BY id LIMIT 20;
+```
+- **Consistent** even with concurrent inserts/deletes (no shifting problem).
+- **Efficient** at scale — no need to scan/skip prior rows, uses an index seek.
+- Cannot easily jump to an arbitrary page number (e.g., "go to page 50") — only forward/backward navigation.
+
+**Offset vs Cursor (classic interview question):** Offset pagination is simpler and supports random page access but degrades in performance and consistency at scale. Cursor pagination is the standard for large, high-throughput, or real-time-changing datasets (e.g., social media feeds, Stripe/GitHub APIs) because it's both fast and stable under concurrent writes.
+
+### Page-based pagination
+```
+GET /users?page=3&pageSize=20
+```
+Essentially a friendlier wrapper around offset pagination (`offset = (page-1) * pageSize`) — same trade-offs apply.
+
+---
+
+## 15. Rate Limiting
+
+Restricting how many requests a client can make in a given time window, to protect the server from abuse/overload and ensure fair usage.
+
+**Common algorithms (frequently asked to compare):**
+
+1. **Fixed Window Counter**: Count requests in fixed time buckets (e.g., per-minute). Simple, but allows bursts at window boundaries (e.g., 100 requests at 11:59:59 + 100 more at 12:00:00 = 200 requests in 1 second).
+
+2. **Sliding Window Log**: Store a timestamp per request; count requests within the trailing window (e.g., last 60 seconds) on every check. Accurate, but memory-intensive at scale (storing every timestamp).
+
+3. **Sliding Window Counter**: Hybrid — weights the previous and current fixed windows proportionally to approximate a sliding window without storing every timestamp. Good balance of accuracy and efficiency.
+
+4. **Token Bucket**: A bucket holds tokens, refilled at a fixed rate up to a max capacity; each request consumes one token; requests are rejected/queued if the bucket is empty. **Allows controlled bursts** (up to bucket capacity) while enforcing a long-term average rate. Very widely used (e.g., AWS API Gateway).
+
+5. **Leaky Bucket**: Requests enter a queue (the "bucket") and are processed ("leak out") at a constant rate, regardless of burst size. Smooths out bursts into a steady output rate — used when a **constant** processing rate matters more than allowing bursts.
+
+**Token Bucket vs Leaky Bucket (classic interview question):** Token bucket allows bursts (as long as tokens are available); leaky bucket enforces a strictly constant output rate regardless of input burstiness. Token bucket is more common for API rate limiting (some burst tolerance is usually fine); leaky bucket suits scenarios needing smooth, constant-rate output (e.g., traffic shaping).
+
+**Response when limited:** `429 Too Many Requests`, often with a `Retry-After` header and headers like `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`.
+
+**Where to enforce it:** Can be per-user/API-key, per-IP, per-endpoint, or global; typically implemented at an API Gateway / reverse proxy layer (e.g., Nginx, Kong, AWS API Gateway) rather than in application code, and backed by a fast shared store like Redis for distributed rate limiting across multiple server instances.
+
+---
+
+## 16. Caching
+
+Storing copies of responses to avoid redundant, expensive computation/network calls.
+
+### HTTP Caching directives
+```
+Cache-Control: public, max-age=3600, must-revalidate
+```
+- `public` / `private` — whether intermediate caches (CDNs, proxies) may store the response, or only the end client.
+- `max-age` — how long (seconds) the response is considered fresh.
+- `no-cache` — cache may store it, but must **revalidate** with the server before using it (misleading name — it doesn't mean "don't cache").
+- `no-store` — never cache at all (e.g., sensitive data).
+
+### Cache validation (conditional requests)
+- **`ETag`**: a fingerprint/hash of the resource's content. Client sends it back via `If-None-Match` on the next request; if unchanged, server responds `304 Not Modified` (no body sent, saving bandwidth) instead of re-sending the full resource.
+- **`Last-Modified`** / `If-Modified-Since`: timestamp-based equivalent, less precise than ETag (second-level granularity).
+
+### Where caching happens (layers, commonly asked)
+1. **Browser cache** — client-side, per-user.
+2. **CDN (edge cache)** — geographically distributed, caches static/semi-static content close to users.
+3. **Reverse proxy cache** (e.g., Varnish, Nginx) — in front of application servers.
+4. **Application-level cache** (e.g., Redis/Memcached) — caches DB query results or computed data.
+5. **Database query cache** — internal to the DB engine.
+
+### Cache invalidation strategies (famously "one of the two hard problems in computer science")
+- **TTL (Time-To-Live) expiry**: simplest — data auto-expires after a set time.
+- **Write-through**: update cache and DB simultaneously on writes — cache always consistent, but writes are slower.
+- **Write-behind (write-back)**: write to cache immediately, asynchronously persist to DB later — fast writes, but risk of data loss if the cache fails before persisting.
+- **Cache-aside (lazy loading)**: application checks cache first; on a miss, reads from DB and populates the cache. Most common pattern in practice. Requires explicit invalidation/eviction on writes (delete or update the cache entry when the underlying data changes).
+
+---
+
+## 17. Content Negotiation
+
+The mechanism by which a client and server agree on the format of the response (or request), so the same URI can serve different representations.
+
+```
+GET /users/123
+Accept: application/json         → server returns JSON
+Accept: application/xml          → server returns XML
+Accept-Language: fr-FR           → server returns French-localized content
+Accept-Encoding: gzip, br        → server compresses response accordingly
+```
+
+**Server response reflects the negotiated format:**
+```
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Language: fr-FR
+Content-Encoding: gzip
+```
+
+If the server can't satisfy the requested format, it may respond `406 Not Acceptable`.
+
+**Interview trap:** Content negotiation is what allows a single REST endpoint (`/users/123`) to remain a stable, uniform identifier for "user 123" while still supporting multiple representations (JSON, XML, etc.) — directly reinforcing REST's "uniform interface" constraint from Section 1.
+
+---
+
+## 18. Webhooks
+
+A way for a server to **push** real-time notifications to another system when an event occurs, by making an HTTP `POST` request to a client-registered URL — the inverse of the client polling the server for updates.
+
+```
+1. Client registers a webhook URL: POST /webhooks { "url": "https://myapp.com/hooks/payment-completed" }
+2. Later, when a payment completes on the provider's side...
+3. Provider sends: POST https://myapp.com/hooks/payment-completed
+                    { "event": "payment.completed", "paymentId": "pay_123", "amount": 5000 }
+```
+
+**Why use webhooks instead of polling?** Polling (`GET /payments/123` every few seconds) wastes resources and adds latency for detecting changes. Webhooks are event-driven — the receiving system is notified immediately when something happens, with far less overhead.
+
+**Key implementation concerns (commonly probed):**
+- **Verification/security**: the receiver must verify the webhook actually came from the claimed sender — typically via a shared-secret **HMAC signature** in a header (e.g., Stripe's `Stripe-Signature`), not just trusting the payload.
+- **Retries & idempotency**: webhook senders typically retry on failure (no `2xx` response) — the receiver must handle duplicate deliveries idempotently (see Section 13).
+- **Ordering**: webhooks may arrive out of order; don't assume strict delivery order — include timestamps/sequence numbers if order matters.
+- **Timeouts**: the receiving endpoint should respond quickly (e.g., `200 OK` immediately) and process the payload asynchronously, since slow responses can cause the sender to time out and retry unnecessarily.
+
+**Real-world examples:** Stripe payment events, GitHub push/PR events triggering CI, Slack incoming messages, Shopify order events.
+
+---
+
+## 19. WebSockets
+
+A protocol providing a **persistent, full-duplex** (bidirectional) communication channel over a single TCP connection, allowing both client and server to send messages to each other at any time — unlike the traditional HTTP request-response cycle.
+
+**Handshake:** Starts as a regular HTTP request with an `Upgrade: websocket` header; if the server agrees, the connection is upgraded from HTTP to the WebSocket protocol (`101 Switching Protocols`), and it stays open for ongoing bidirectional messages.
+
+```javascript
+const socket = new WebSocket("wss://example.com/chat");
+socket.onmessage = (event) => console.log("Received:", event.data);
+socket.send("Hello server!"); // server can also push to client anytime, unprompted
+```
+
+**When to use WebSockets:** Real-time, bidirectional, low-latency use cases — chat applications, live collaborative editing (e.g., Google Docs), multiplayer games, live trading/stock tickers, live sports scores.
+
+**Trade-offs:** More complex to scale (persistent connections consume server resources per client; need sticky sessions or a pub/sub backplane like Redis to broadcast across multiple server instances); doesn't automatically get HTTP's caching/CDN benefits; requires explicit reconnection/heartbeat logic for reliability.
+
+---
+
+## 20. SSE (Server-Sent Events)
+
+A simpler alternative to WebSockets for **one-directional** (server → client only) real-time updates, built on plain HTTP (no protocol upgrade needed).
+
+```javascript
+const events = new EventSource("/updates");
+events.onmessage = (event) => console.log("New update:", event.data);
+```
+Server keeps the HTTP connection open and streams events as they occur, using the `text/event-stream` content type:
+```
+event: priceUpdate
+data: {"symbol": "AAPL", "price": 191.20}
+
+data: {"symbol": "GOOG", "price": 142.50}
+```
+
+**SSE vs WebSockets (classic interview comparison):**
+| | SSE | WebSockets |
+|---|---|---|
+| Direction | One-way (server → client only) | Bidirectional |
+| Protocol | Plain HTTP | Requires protocol upgrade |
+| Browser reconnection | Automatic (built into `EventSource`) | Manual (must implement reconnect logic) |
+| Data format | Text only (UTF-8) | Text or binary |
+| Complexity | Simpler | More complex |
+| Best for | Live feeds, notifications, stock tickers, progress updates | Chat, gaming, collaborative editing — anything needing client→server real-time too |
+
+**Interview trap:** *"When would you use SSE over WebSockets?"* When communication is inherently one-directional (server pushing updates, client doesn't need to send real-time data back) — SSE is simpler, works over standard HTTP/HTTP2 (easier to proxy/load-balance), and has automatic reconnection built in, making it the better default unless bidirectional communication is genuinely needed.
+
+---
+
+## 21. API Versioning
+
+Strategies for evolving an API without breaking existing clients.
+
+### URI versioning (most common, most visible)
+```
+GET /v1/users/123
+GET /v2/users/123
+```
+- **Pros**: Simple, explicit, easy to route/cache differently per version.
+- **Cons**: "Pollutes" the URI (arguably the same resource now has multiple identifiers, technically against REST's idea that a URI identifies one resource).
+
+### Header versioning
+```
+GET /users/123
+Accept: application/vnd.myapi.v2+json
+```
+- **Pros**: Keeps URIs clean/stable.
+- **Cons**: Less discoverable/visible (can't just look at the URL to know the version); harder to test via browser/simple curl.
+
+### Query parameter versioning
+```
+GET /users/123?version=2
+```
+- **Pros**: Simple to add.
+- **Cons**: Easy to forget/omit, blends versioning with actual query filtering semantics.
+
+**Best practices commonly discussed:**
+- Version only when making **breaking changes** (removing/renaming fields, changing types, changing required-ness) — additive, backward-compatible changes (new optional fields) generally don't need a new version.
+- Maintain old versions for a defined deprecation window, communicate via `Deprecation`/`Sunset` headers.
+- Semantic versioning concepts (major.minor.patch) are more relevant for SDKs/libraries; API versioning in URLs is typically just major version numbers (`v1`, `v2`).
+
+---
+
+## 22. OpenAPI/Swagger
+
+**OpenAPI Specification (OAS)** — formerly known as Swagger — is a standardized, language-agnostic format (YAML/JSON) for describing REST APIs: endpoints, request/response schemas, auth methods, parameters, etc.
+
+```yaml
+openapi: 3.0.0
+info:
+  title: User API
+  version: 1.0.0
+paths:
+  /users/{id}:
+    get:
+      summary: Get a user by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: A user object
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+components:
+  schemas:
+    User:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+```
+
+**Why it matters (practical benefits to mention in interviews):**
+- **Documentation**: Swagger UI auto-renders an interactive, browsable API documentation page from the spec.
+- **Client/server code generation**: tools (e.g., `openapi-generator`) can auto-generate client SDKs and server stubs in many languages from the spec, reducing manual boilerplate and drift between docs and implementation.
+- **Contract-first development**: teams can agree on the API contract (the spec) before implementation begins, enabling frontend and backend teams to work in parallel against a shared, agreed contract (often paired with mock servers generated from the spec).
+- **Validation**: incoming requests/outgoing responses can be validated against the schema automatically (in middleware or CI), catching contract violations early.
+
+**Swagger vs OpenAPI (terminology note, sometimes asked):** "Swagger" was the original tool/spec name; it was donated to the Linux Foundation and renamed **OpenAPI Specification**. "Swagger" now generally refers to the toolset (Swagger UI, Swagger Editor, SwaggerHub) built around the OpenAPI spec.
+
+---
+
+## 23. Rapid-Fire Interview Q&A
+
+**Q: Is REST stateless — so how do we handle "logged in" users?**
+The server doesn't hold session state about the *request-response conversation*, but the client sends enough info (a token, e.g., JWT) with each request for the server to authenticate/identify the caller — no server-side session lookup is required (in the pure token-based model), which is what keeps it stateless.
+
+**Q: Why is `GET` not supposed to have a request body?**
+Not disallowed by the HTTP spec technically, but widely unsupported/ignored by caches, proxies, and many server frameworks — by convention, all parameters for a `GET` go in the URL (query params), and bodies are reserved for methods that modify state.
+
+**Q: What's the difference between authentication and authorization?**
+Authentication = verifying *who* you are (login). Authorization = verifying *what* you're allowed to do (permissions) — maps directly to the 401 vs 403 distinction.
+
+**Q: How would you design an API to handle a client that might submit the same "create order" request twice due to a network retry?**
+Use an idempotency key (Section 13) — the client generates a unique key per logical operation; the server deduplicates based on that key and returns the original result on a repeat.
+
+**Q: When would you choose GraphQL over REST?**
+When clients have highly variable data needs (e.g., a mobile app needing less data than a web dashboard) and over/under-fetching with REST would require many bespoke endpoints; when related, nested data needs to be fetched in one round trip. REST remains simpler and often preferable when caching, file uploads, or a well-understood resource model are priorities.
+
+**Q: What does `Cache-Control: no-cache` actually mean?**
+Despite the name, it does **not** mean "never cache" — it means the cache may store the response but **must revalidate** with the origin server (via ETag/Last-Modified) before serving it. `no-store` is the directive that truly prevents caching altogether.
+
+**Q: Why can't you always trust `Content-Type` from the client?**
+Clients can lie/misconfigure this header — servers should still validate the actual body content rather than blindly trusting what's declared (a common web security consideration, related to content-sniffing attacks).
+
+**Q: How do you keep a WebSocket connection alive / detect disconnects?**
+Implement a heartbeat/ping-pong mechanism — periodically send small ping frames and expect pong responses; if none arrive within a timeout, treat the connection as dead and attempt reconnection.
+
+---
+
+## Suggested Study Approach
+1. Be able to explain the 401 vs 403, PUT vs PATCH, safe vs idempotent, and SSE vs WebSockets distinctions instantly and precisely — these are asked constantly.
+2. Practice designing a simple REST API (e.g., a `/orders` resource) from scratch: URIs, methods, status codes, pagination, versioning strategy, and how you'd secure it (auth) — a very common live-coding/whiteboard interview format.
+3. Walk through the OAuth2 Authorization Code flow from memory, step by step, including why the code-for-token exchange happens server-side.
+4. Pair this section with Section 4 (Databases) since caching, pagination, and idempotency all interact directly with DB design decisions.

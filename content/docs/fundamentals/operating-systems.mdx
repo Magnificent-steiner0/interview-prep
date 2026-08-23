@@ -1,0 +1,355 @@
+---
+title: "Operating Systems"
+description: "Covers process/thread fundamentals, scheduling, synchronization, memory management, and file systems — core CS-fundamentals territory for backend and systems-oriented interviews."
+---
+Covers process/thread fundamentals, scheduling, synchronization, memory management, and file systems — core CS-fundamentals territory for backend and systems-oriented interviews.
+
+---
+
+## Table of Contents
+1. [Processes](#1-processes)
+2. [Threads](#2-threads)
+3. [Scheduling](#3-scheduling)
+4. [Context Switching](#4-context-switching)
+5. [IPC (Inter-Process Communication)](#5-ipc-inter-process-communication)
+6. [Synchronization](#6-synchronization)
+7. [Mutex](#7-mutex)
+8. [Semaphore](#8-semaphore)
+9. [Deadlock](#9-deadlock)
+10. [Starvation](#10-starvation)
+11. [Paging](#11-paging)
+12. [Virtual Memory](#12-virtual-memory)
+13. [Caching](#13-caching)
+14. [File Systems](#14-file-systems)
+15. [Rapid-Fire Interview Q&A](#15-rapid-fire-interview-qa)
+
+---
+
+## 1. Processes
+
+A **process** is an instance of a running program — an independent execution unit with its own isolated **address space** (memory), including code, data, heap, and stack segments, plus OS-managed resources (open file handles, allocated memory).
+
+**Process states (commonly asked to name/explain, and draw the state diagram):**
+```
+New → Ready → Running → Waiting (Blocked) → Ready → ... → Terminated
+                  ↑___________________________|
+             (I/O wait, or preempted back to Ready)
+```
+- **New**: process is being created.
+- **Ready**: waiting to be assigned to a CPU (has everything it needs except CPU time).
+- **Running**: currently executing on the CPU.
+- **Waiting/Blocked**: waiting for some event (I/O completion, a resource, a signal) — cannot proceed even if given the CPU.
+- **Terminated**: finished execution.
+
+**Process Control Block (PCB):** The OS data structure holding all information about a process needed to manage/resume it — process ID, state, program counter, register values, memory management info, scheduling priority, list of open files. This is exactly what gets saved/restored during a **context switch** (Section 4).
+
+**Process Creation:** In Unix-like systems, done via `fork()` (creates a near-identical copy/child of the calling process) often followed by `exec()` (replaces the child's memory image with a new program) — a very commonly asked pair of syscalls.
+```c
+pid_t pid = fork();
+if (pid == 0) {
+    // child process — pid is 0 here
+    exec("/bin/ls");
+} else {
+    // parent process — pid is the child's actual PID here
+    wait(NULL); // parent waits for child to finish
+}
+```
+
+**Zombie vs Orphan process (commonly asked to distinguish):**
+- **Zombie**: a process that has finished execution but still has an entry in the process table because its parent hasn't yet called `wait()` to read its exit status — it's "dead but not yet reaped."
+- **Orphan**: a process whose parent terminated before it did — typically "adopted" by the `init`/`systemd` process (PID 1), which periodically reaps orphans, preventing them from becoming permanent zombies.
+
+---
+
+## 2. Threads
+
+A **thread** is the smallest unit of execution within a process. Multiple threads within the same process **share the same address space** (code, heap, global data) but each has its own **stack, program counter, and register set**.
+
+**Process vs Thread (extremely commonly asked comparison):**
+| | Process | Thread |
+|---|---|---|
+| Memory | Own isolated address space | Shares address space with sibling threads |
+| Creation cost | Expensive (OS must set up a new address space) | Cheap (reuses existing process resources) |
+| Context switch cost | Expensive (must switch memory mappings/page tables) | Cheaper (same address space, less to swap) |
+| Communication | Requires IPC (Section 5) — more overhead | Direct (shared memory) — but requires synchronization (Section 6) to avoid races |
+| Fault isolation | One process crashing doesn't affect others | One thread crashing (e.g., segfault) can bring down the entire process |
+
+**User-level vs Kernel-level threads:**
+- **User-level threads**: managed by a user-space library, without kernel awareness — fast to create/switch, but the kernel can't schedule them across multiple CPU cores independently (the whole process looks like one schedulable unit to the OS), and one blocking syscall can block all threads in the process.
+- **Kernel-level threads**: managed directly by the OS scheduler — can be scheduled independently across cores (true parallelism), but creation/context-switching has more overhead (kernel involvement).
+- **Hybrid (M:N) models**: map M user-level threads onto N kernel threads, attempting to balance the trade-offs.
+
+**Interview trap — Python's GIL (frequently asked in Python-specific interviews):** CPython's **Global Interpreter Lock** ensures only one thread executes Python bytecode at a time, even on a multi-core machine — meaning Python threads don't achieve true CPU-bound parallelism (though they still help with I/O-bound concurrency, since the GIL is released during I/O waits). This is why CPU-bound Python workloads typically use **multiprocessing** (separate processes, separate memory, separate GIL each) instead of threading for real parallelism.
+
+---
+
+## 3. Scheduling
+
+The OS component (the **scheduler**) that decides which process/thread in the Ready queue gets the CPU next, and for how long.
+
+**Common scheduling algorithms (know all of these — very frequently asked to compare):**
+
+- **FCFS (First-Come, First-Served)**: processes run in arrival order, no preemption. Simple, but suffers from the **convoy effect** — a long process at the front makes all subsequent short processes wait, hurting average wait time.
+
+- **SJF (Shortest Job First)**: picks the process with the shortest estimated burst (CPU) time next. Minimizes average waiting time **optimally** (provably, for a fixed set of processes) — but requires knowing/predicting burst times in advance (often estimated via exponential averaging of past bursts), and can cause **starvation** (Section 10) for long processes if short ones keep arriving.
+
+- **Priority Scheduling**: each process gets a priority; highest priority runs first. Can be preemptive or non-preemptive. Also prone to starvation for low-priority processes — commonly mitigated with **aging** (gradually increasing a waiting process's priority the longer it waits).
+
+- **Round Robin (RR)**: each process gets a fixed **time quantum**; if it doesn't finish, it's preempted and moved to the back of the Ready queue. Fair, good for interactive/time-sharing systems (predictable response time), but the **quantum size matters a lot**: too large → degenerates toward FCFS behavior (poor responsiveness); too small → excessive context-switching overhead dominates actual work.
+
+- **Multilevel Queue / Multilevel Feedback Queue (MLFQ)**: multiple Ready queues with different priorities/algorithms (e.g., a queue for interactive/short processes with RR + short quantum, a queue for long CPU-bound batch jobs with FCFS). MLFQ additionally allows processes to **move between queues** based on observed behavior (e.g., a process using its full quantum repeatedly is demoted to a lower-priority queue, assumed to be CPU-bound; a process that frequently yields early via I/O stays in a higher-priority, interactive-favoring queue) — this is the scheduling approach real-world general-purpose OS schedulers (like older Linux/Windows schedulers) approximate.
+
+**Preemptive vs Non-preemptive (commonly asked distinction):** Preemptive scheduling can interrupt a running process before it voluntarily yields (e.g., RR's timer-based preemption, or a higher-priority process arriving); non-preemptive scheduling lets a running process run to completion or until it voluntarily blocks (e.g., pure FCFS, non-preemptive SJF/Priority).
+
+**Scheduling metrics to know (commonly asked to define):**
+- **Turnaround time**: total time from process arrival to completion.
+- **Waiting time**: total time spent in the Ready queue (not running, not blocked).
+- **Response time**: time from arrival until the *first* time it gets the CPU (important for interactive systems — this is what Round Robin specifically optimizes for over pure throughput).
+
+---
+
+## 4. Context Switching
+
+The process of saving the state (registers, program counter, memory mappings — essentially the PCB, Section 1) of the currently running process/thread, and restoring the saved state of the next one to run — allowing the CPU to be shared across multiple processes/threads, creating the illusion of true concurrency even on a single core.
+
+**Why it has a real performance cost (commonly asked to explain):**
+- Saving/restoring registers and program counter takes CPU cycles directly.
+- **Cache and TLB invalidation**: the CPU's cache and Translation Lookaside Buffer (Section 11) are "warm" with the outgoing process's data/instructions; after a switch, the new process starts with a "cold" cache, causing extra cache misses until it warms up again — often a bigger real-world cost than the raw register save/restore.
+- Switching between **processes** is more expensive than switching between **threads of the same process**, because process switches also require changing memory address space mappings (page tables), while threads of the same process already share that mapping.
+
+**Why this matters practically:** Overly fine-grained context switching (e.g., an extremely small Round Robin time quantum, or excessive thread creation for trivial tasks) can cause **thrashing**-like overhead where the system spends more time switching than doing actual work — a key reason thread pools (bounded, reused worker threads) are preferred over spawning a new thread per task in high-throughput systems.
+
+---
+
+## 5. IPC (Inter-Process Communication)
+
+Mechanisms allowing separate processes (with their own isolated address spaces, per Section 1) to communicate and synchronize.
+
+**Common IPC mechanisms (commonly asked to name and compare):**
+
+- **Pipes**: a unidirectional (or, for named pipes, sometimes bidirectional in the right configuration) byte stream connecting two related processes (e.g., parent-child), commonly seen in shell command chaining (`ls | grep foo` — the shell connects `ls`'s stdout to `grep`'s stdin via a pipe).
+- **Named Pipes (FIFOs)**: like pipes, but exist as an actual file-system entity, allowing **unrelated** processes to communicate (not just parent-child).
+- **Message Queues**: the OS maintains a queue of discrete messages; processes can send/receive without needing to be connected simultaneously (asynchronous, decoupled) — a kernel-level, single-machine analog to the distributed message queues discussed in the APIs guide (Kafka/RabbitMQ conceptually).
+- **Shared Memory**: the OS maps the same physical memory region into multiple processes' address spaces — the **fastest** IPC method (no data copying between processes, no kernel involvement after setup), but requires explicit **synchronization** (Section 6) since multiple processes can read/write concurrently.
+- **Sockets**: communication endpoints that work both locally and over a network — the most general-purpose IPC mechanism, and the same abstraction used for actual network communication (TCP/UDP sockets, from the Networking guide).
+- **Signals**: a limited, asynchronous notification mechanism (e.g., `SIGKILL`, `SIGTERM`, `SIGINT`) — a process can be interrupted to handle a signal, but signals carry very little data (essentially just a signal number), unlike the richer data-passing mechanisms above.
+
+**Speed comparison (commonly asked to rank):** Shared Memory (fastest — no copying/kernel calls after setup) > Pipes/Message Queues (moderate — kernel-mediated, data is copied) > Sockets (slowest of the local options — more overhead due to the network-stack-capable abstraction, even for local communication), though sockets offer the most flexibility (can transparently extend to different machines).
+
+---
+
+## 6. Synchronization
+
+The general problem of coordinating concurrent processes/threads that access **shared resources**, to prevent incorrect behavior from concurrent, uncoordinated access.
+
+**Race Condition (fundamental concept, always worth defining precisely):** Occurs when the correctness of a program depends on the **relative timing/interleaving** of multiple threads/processes accessing shared data — if two threads read-modify-write a shared variable without synchronization, the final result can depend unpredictably on execution order, producing incorrect results.
+
+```
+Thread A: reads balance (100), computes 100+50=150
+Thread B: reads balance (100), computes 100+30=130 — both read BEFORE either wrote back
+Thread A: writes balance = 150
+Thread B: writes balance = 130   ← Thread A's update is LOST — final balance should be 180, but is 130
+```
+
+**Critical Section:** The specific segment of code that accesses shared resources and must not be executed by more than one thread/process at a time — synchronization primitives (mutexes, semaphores) exist specifically to protect critical sections.
+
+**Requirements for a correct solution to the critical section problem (commonly asked to name, from the classical OS theory):**
+1. **Mutual Exclusion**: only one process/thread may be in the critical section at a time.
+2. **Progress**: if no process is in the critical section, one of the processes waiting to enter must eventually be allowed to (no indefinite postponement caused by the synchronization mechanism itself).
+3. **Bounded Waiting**: there must be a limit on how many times other processes can enter the critical section after a process has requested entry, before that process's request is granted (prevents starvation, Section 10, specifically caused by the synchronization scheme).
+
+---
+
+## 7. Mutex
+
+**Mutex (MUTual EXclusion lock)**: a synchronization primitive that allows only **one** thread to hold it at a time — used to protect a critical section, ensuring exclusive access to a shared resource.
+
+```python
+import threading
+lock = threading.Lock()
+balance = 100
+
+def withdraw(amount):
+    with lock:  # acquire lock, automatically released after the block (even on exception)
+        global balance
+        balance -= amount  # critical section — now safe from race conditions
+```
+
+**Key property: ownership.** A mutex is typically **owned** by the thread that locked it — only that same thread is generally expected/allowed to unlock it (this is a key distinguishing property vs semaphores, see below). This ownership model allows for features like **reentrant/recursive mutexes**, which permit the *same* thread to lock it multiple times (tracking a lock count) without deadlocking itself.
+
+**Deadlock risk:** if a thread acquires a mutex and then fails to release it (e.g., due to an unhandled exception before an explicit unlock), other threads waiting for that mutex will block forever — this is exactly why RAII-style patterns (`with lock:` in Python, `std::lock_guard` in C++, `synchronized` blocks in Java) are strongly preferred over manual `lock()`/`unlock()` calls, guaranteeing release even if an exception occurs mid-critical-section.
+
+---
+
+## 8. Semaphore
+
+A more general synchronization primitive than a mutex: an integer counter, manipulated only via two atomic operations, `wait()`/`P()` (decrement; block if the result would go below zero) and `signal()`/`V()` (increment; potentially wake a waiting thread).
+
+**Binary Semaphore vs Mutex (very commonly asked — subtle but important distinction):**
+| | Mutex | Binary Semaphore |
+|---|---|---|
+| Value range | Locked/Unlocked (conceptually binary) | Integer, but constrained to 0 or 1 for "binary" use |
+| Ownership | Owned by the locking thread; typically only that thread can unlock it | **No ownership** — any thread/process can call `signal()`, even one that never called `wait()` |
+| Primary purpose | Mutual exclusion (protecting a critical section) | Can be used for mutual exclusion OR for **signaling**/synchronization between different threads (e.g., thread A signals thread B to proceed) |
+
+**Counting Semaphore:** Allows the counter to range beyond just 0/1, representing a pool of **N available resources** (e.g., a connection pool with 10 slots) — `wait()` decrements (a thread "takes" a resource, blocking if none available), `signal()` increments (a thread "returns" a resource). This is the classic mechanism for limiting concurrent access to a finite resource pool.
+
+**Interview trap:** *"Can a mutex be used for thread signaling, like a semaphore can?"* Not cleanly — because of the ownership constraint (only the locking thread can typically unlock a mutex), a mutex isn't well-suited for the pattern "thread A does something, then signals thread B to proceed," which requires signaling *across* threads — that's a semaphore's (or a condition variable's) job, not a mutex's.
+
+**Classic synchronization problems (worth knowing by name, commonly referenced in interviews even if not asked to fully solve):** Producer-Consumer (bounded buffer) problem, Dining Philosophers problem (classic deadlock-illustration scenario), Readers-Writers problem (allowing concurrent reads but exclusive writes) — all traditionally solved using combinations of mutexes and semaphores.
+
+---
+
+## 9. Deadlock
+
+*(Also covered from a database-transaction angle in the Databases guide — this is the general OS-level theory.)*
+
+A state where two or more processes are each waiting for a resource held by another, forming a cycle, such that none can ever proceed.
+
+**The four necessary conditions for deadlock (Coffman conditions) — ALL four must hold simultaneously (extremely commonly asked to list):**
+1. **Mutual Exclusion**: at least one resource must be held in a non-shareable mode (only one process can use it at a time).
+2. **Hold and Wait**: a process holding at least one resource is waiting to acquire additional resources currently held by other processes.
+3. **No Preemption**: resources cannot be forcibly taken away from a process — they can only be released voluntarily.
+4. **Circular Wait**: a cycle of processes exists, each waiting for a resource held by the next one in the cycle.
+
+**Deadlock handling strategies (commonly asked to compare — four broad approaches):**
+- **Prevention**: design the system to make at least one of the four Coffman conditions structurally impossible (e.g., enforce a global lock-acquisition ordering to eliminate circular wait — the same strategy mentioned in the Databases guide's deadlock section).
+- **Avoidance**: dynamically examine resource-allocation requests before granting them, only granting if the resulting state is still "safe" (won't lead to deadlock) — the classic example is the **Banker's Algorithm**, which simulates whether granting a request could ever lead to a state with no possible safe execution order.
+- **Detection and Recovery**: allow deadlocks to occur, but periodically run a detection algorithm (e.g., building a resource-allocation graph and checking for cycles), then recover by forcibly preempting resources or terminating/rolling back one or more processes (the "victim," as discussed in the Databases guide).
+- **Ignorance (the "Ostrich Algorithm")**: simply don't handle deadlocks at all, assuming they're rare enough that the cost of prevention/detection isn't worth it — this is, perhaps surprisingly, what many general-purpose OSes (including mainstream Linux/Windows) actually do for most resources, relying on applications to be well-behaved.
+
+---
+
+## 10. Starvation
+
+A situation where a process is perpetually denied the resources it needs to proceed, even though it's not technically deadlocked (the system as a whole continues making progress — just never for this particular process).
+
+**Common causes:** Priority scheduling that always favors higher-priority processes, indefinitely delaying low-priority ones; a synchronization scheme that doesn't guarantee bounded waiting (violating the third critical-section requirement from Section 6).
+
+**Mitigation: Aging.** Gradually increase the priority of a process the longer it waits, ensuring it will eventually become high-priority enough to be scheduled — directly solving priority-based starvation by making the "unfairness" self-correcting over time.
+
+**Deadlock vs Starvation (commonly asked distinction):** Deadlock = a cyclic wait where **no** involved process can ever proceed (total standstill for that group). Starvation = a **specific** process is indefinitely denied resources/CPU time, while the system overall continues making progress for other processes. A system can have starvation without any deadlock at all.
+
+---
+
+## 11. Paging
+
+A memory management scheme that eliminates the need for contiguous physical memory allocation by dividing both **physical memory** into fixed-size **frames** and a process's **logical/virtual memory** into equally-sized **pages**, with a **page table** mapping virtual pages to physical frames.
+
+```
+Process's Virtual Address Space:      Physical Memory:
+Page 0 → Frame 5                      Frame 0: [other process data]
+Page 1 → Frame 2                      Frame 1: [other process data]
+Page 2 → Frame 8                      Frame 2: [Page 1's data]
+                                       Frame 5: [Page 0's data]
+                                       Frame 8: [Page 2's data]
+```
+
+**Why paging matters (commonly asked "why not just use contiguous allocation"):** Contiguous memory allocation suffers from **external fragmentation** — over time, free memory becomes scattered into small, non-contiguous chunks that individually may be too small to satisfy a new allocation request, even though the total free memory is sufficient. Paging solves this by allowing a process's memory to be scattered across **non-contiguous** physical frames — any free frame can be used, eliminating external fragmentation entirely (though paging can introduce **internal fragmentation** — wasted space within the last, partially-used page of a process).
+
+**Page Table & Translation Lookaside Buffer (TLB):** Every memory access requires translating a virtual address to a physical one via the page table — but the page table itself lives in memory, so a naive lookup would require **two** memory accesses per actual memory access (one to read the page table entry, one for the actual data), doubling effective memory latency. The **TLB** is a small, fast hardware cache of recent virtual-to-physical translations, avoiding the page-table memory access on a **TLB hit** — a TLB miss falls back to the slower full page-table walk. This directly connects to why context switches are expensive (Section 4) — a process switch typically invalidates/flushes the TLB, since the new process has entirely different valid translations.
+
+---
+
+## 12. Virtual Memory
+
+An abstraction giving each process the illusion of its own large, private, contiguous address space, independent of how much physical RAM is actually installed or how memory is physically organized — implemented via paging (or, historically, segmentation) plus **demand paging** and swapping to disk.
+
+**Benefits (commonly asked to list):**
+- **Isolation**: each process has its own virtual address space, unable to directly access another process's memory (a foundational OS security/stability guarantee).
+- **Allows running programs larger than physical RAM**: via demand paging (see below) and swapping infrequently-used pages to disk.
+- **Simplifies programming**: programs are written as if they have the entire address space to themselves, without needing to know the physical memory layout or coordinate with other processes.
+- **Efficient physical memory sharing**: multiple processes can share physical pages when appropriate (e.g., shared libraries loaded once in physical memory, mapped into multiple processes' virtual address spaces).
+
+**Demand Paging:** Pages are only loaded into physical memory when actually accessed (referenced) for the first time, not all upfront — a **page fault** occurs when a process accesses a virtual page not currently in physical memory, triggering the OS to load it from disk (or, if it's a genuinely new/uninitialized page, simply allocate a fresh frame).
+
+**Page Replacement Algorithms (commonly asked, when physical memory is full and a page must be evicted to make room for a newly-needed one):**
+- **FIFO**: evict the oldest-loaded page. Simple, but can suffer from **Belady's Anomaly** — counterintuitively, increasing the number of available frames can sometimes *increase* the page fault rate under FIFO, a famously surprising fact worth mentioning if this topic comes up.
+- **LRU (Least Recently Used)**: evict the page that hasn't been accessed for the longest time — a good practical approximation of optimal behavior, based on the **principle of locality** (recently used data is likely to be used again soon), but expensive to implement perfectly (requires tracking access recency for every page).
+- **Optimal (Belady's Algorithm)**: evict the page that won't be used for the longest time in the future — provably optimal, but requires knowing the future access pattern in advance, making it purely a theoretical benchmark for comparing other algorithms, not implementable in practice.
+- **Clock (Second-Chance) Algorithm**: a practical, efficient approximation of LRU — pages are arranged in a circular list with a "reference bit"; on eviction, the clock hand sweeps through, giving each page a "second chance" (clearing its reference bit and skipping it) if the bit was set, only evicting a page whose bit is already clear.
+
+**Thrashing:** Occurs when a system spends more time paging (swapping pages in/out of physical memory) than doing actual useful work — typically caused by too many processes competing for too little physical memory relative to their **working sets** (the set of pages each process actively needs at a given time), causing constant page faults. Mitigated by reducing the degree of multiprogramming (fewer concurrent processes) or adding more physical RAM.
+
+---
+
+## 13. Caching
+
+*(General OS/hardware caching principles — complements the application/HTTP-level caching covered in the Databases and APIs guides.)*
+
+**CPU Cache hierarchy:** Modern CPUs have multiple cache levels (L1 fastest/smallest, closest to the core; L2 larger/slower; L3 shared across cores, largest/slowest of the on-chip caches) sitting between the CPU and main memory (RAM), exploiting the fact that RAM access is orders of magnitude slower than register/cache access.
+
+**Principle of Locality (the theoretical foundation all caching relies on, worth being able to state precisely):**
+- **Temporal locality**: recently accessed data is likely to be accessed again soon (e.g., a loop variable).
+- **Spatial locality**: data near recently accessed memory addresses is likely to be accessed soon too (e.g., iterating through an array sequentially) — this is why caches load data in fixed-size **cache lines/blocks** (typically 64 bytes) rather than single bytes, pre-fetching nearby data that's likely to be needed next.
+
+**Cache hit/miss & write policies (commonly asked to know the terms):**
+- **Cache hit**: requested data found in the cache — fast path.
+- **Cache miss**: data not in cache — must fetch from the slower level below (potentially all the way to RAM, or even disk).
+- **Write-through**: writes go to both the cache and the underlying storage simultaneously — simpler, always consistent, but slower writes.
+- **Write-back**: writes go only to the cache initially, marked "dirty," and are flushed to underlying storage later (e.g., on eviction) — faster writes, but risk of data loss if a crash occurs before the flush, and added complexity in tracking dirty state.
+
+This directly mirrors (and is the low-level hardware analog of) the same write-through/write-back/cache-aside trade-offs discussed for application-level and database caching in the Databases guide's Caching section — the same fundamental trade-offs (consistency vs. speed) recur at every layer of a system, from CPU cache up through CDNs.
+
+---
+
+## 14. File Systems
+
+The OS component responsible for organizing, storing, retrieving, naming, and managing data on persistent storage (disks/SSDs), presenting it to applications as a hierarchy of files and directories.
+
+**Key structures (commonly asked to know):**
+- **Inode**: a data structure storing metadata about a file (permissions, owner, size, timestamps, and pointers to the actual data blocks on disk) — notably, the inode does **not** store the filename itself; filenames are mapped to inodes via directory entries, which is why a file can have multiple names (**hard links**) pointing to the same underlying inode/data.
+- **Directory**: essentially a special kind of file that maps filenames to inode numbers.
+- **File Allocation Table (FAT)** / other allocation schemes: track which disk blocks belong to which file, and which blocks are free — different file systems (FAT32, NTFS, ext4, APFS) implement this differently, with trade-offs in fragmentation resistance, max file size, journaling support, etc.
+
+**Hard Links vs Symbolic (Soft) Links (very commonly asked to distinguish):**
+| | Hard Link | Symbolic (Soft) Link |
+|---|---|---|
+| What it points to | Directly to the **inode** (the actual data) | To the **path/filename** of another file |
+| Behavior if original is deleted | Still works — data persists as long as at least one hard link (directory entry) references the inode | **Breaks** ("dangling link") — the path it pointed to no longer resolves |
+| Cross-filesystem/partition | Not allowed (inodes are filesystem-specific) | Allowed (just stores a path string) |
+| Can link to a directory? | Typically disallowed (to prevent filesystem cycles) | Allowed |
+
+**Journaling File Systems (worth mentioning if crash-recovery comes up):** Maintain a **journal/log** of intended changes before actually committing them to the main file system structures — if a crash occurs mid-write, the journal can be replayed on reboot to complete or cleanly roll back the interrupted operation, preventing file-system corruption. This is directly analogous to a database's **Write-Ahead Log (WAL)**, which provides the same durability guarantee (ACID's "D," from the Databases guide) at the database layer.
+
+**File system operations & their OS-level implications:** Opening a file involves the OS returning a **file descriptor** (an integer handle, an index into the process's per-process open-file table, which itself points to a system-wide open-file table entry tracking things like the current read/write offset) — this is why file descriptors are a limited resource per process (and why "too many open files" errors happen if they're not properly closed), and why concepts like `dup()`/redirecting stdin/stdout/stderr in shells work by manipulating file descriptor table entries.
+
+---
+
+## 15. Rapid-Fire Interview Q&A
+
+**Q: What's the fundamental difference between a process and a thread?**
+A process has its own isolated address space; threads within the same process share that address space but have independent stacks/registers/program counters — making threads cheaper to create/switch but requiring explicit synchronization to safely share data.
+
+**Q: Why is context switching between processes more expensive than between threads?**
+Process switches require changing memory address space mappings (page tables) and typically flush the TLB; thread switches within the same process don't need to change the address space at all, since threads share it.
+
+**Q: What are the four necessary conditions for deadlock, and how do you break them?**
+Mutual exclusion, hold-and-wait, no preemption, circular wait — all four must hold. Breaking any single one (most commonly circular wait, via enforced lock-ordering) prevents deadlock.
+
+**Q: Mutex vs Semaphore — what's the real distinguishing property?**
+Ownership. A mutex is owned by the thread that locked it (only that thread should unlock it) and is meant purely for mutual exclusion. A semaphore has no ownership concept — any thread can signal it — making it suitable for cross-thread signaling, not just mutual exclusion.
+
+**Q: What's the difference between deadlock and starvation?**
+Deadlock: a cyclic wait where none of the involved processes can ever proceed. Starvation: one specific process is perpetually denied resources while the rest of the system continues making progress.
+
+**Q: Why does paging solve external fragmentation, and what does it introduce instead?**
+By allowing a process's memory to be scattered across non-contiguous physical frames (any free frame works), it eliminates the need for contiguous allocation. It introduces internal fragmentation instead — wasted space within a process's last, partially-filled page.
+
+**Q: What's a page fault, and is it always bad?**
+A page fault occurs when a process accesses a virtual page not currently mapped to physical memory. It's a normal, expected part of demand paging (e.g., the very first access to any page) — it only becomes a performance problem when they happen excessively (thrashing), forcing constant disk I/O.
+
+**Q: Hard link vs symbolic link — what breaks if you delete the original file?**
+A symbolic link breaks (dangling reference to a now-nonexistent path); a hard link keeps working because it points directly to the inode/data, which persists as long as any hard link (directory entry) still references it.
+
+**Q: Why do thread pools exist instead of just spawning a new thread per task?**
+Thread creation and context-switching both carry real overhead (Section 4); a bounded, reused pool of worker threads avoids the cost of constantly creating/destroying threads and prevents unbounded resource consumption (e.g., an unbounded flood of threads under high load) — a very common real-world backend engineering pattern.
+
+---
+
+## Suggested Study Approach
+1. Be able to draw the process state diagram and explain a context switch's cost sources from memory — both are extremely common whiteboard/verbal questions.
+2. Practice explaining mutex vs semaphore precisely (the ownership distinction) — this is one of the most frequently botched comparisons in interviews.
+3. Memorize the four Coffman conditions for deadlock and be ready to give a concrete prevention strategy for each.
+4. Connect this section explicitly back to the Databases guide (transactions/locks/deadlocks/isolation levels are OS-level concepts applied at the database layer) and the Networking guide (sockets as IPC) — interviewers value candidates who can draw these cross-topic connections.
+5. Practice explaining paging/virtual memory/TLB together as one coherent story (why paging exists → what a page table is → why a TLB is needed → what happens on a miss) — interviewers often chain these as follow-ups to a single opening question.

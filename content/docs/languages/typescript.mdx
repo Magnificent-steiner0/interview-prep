@@ -1,0 +1,562 @@
+---
+title: "TypeScript"
+description: "Covers TypeScript's type system: structural typing, interfaces vs types, generics, utility types, narrowing, and the compilation model — building directly on the JavaScript guid..."
+---
+Covers TypeScript's type system: structural typing, interfaces vs types, generics, utility types, narrowing, and the compilation model — building directly on the JavaScript guide, and setting up the typing patterns that come up constantly in React interviews.
+
+---
+
+## Table of Contents
+1. [What TypeScript Is & Why It Exists](#1-what-typescript-is--why-it-exists)
+2. [Structural Typing (Duck Typing for Types)](#2-structural-typing-duck-typing-for-types)
+3. [`type` vs `interface`](#3-type-vs-interface)
+4. [Basic & Special Types](#4-basic--special-types)
+5. [Union & Intersection Types](#5-union--intersection-types)
+6. [Type Narrowing](#6-type-narrowing)
+7. [Generics](#7-generics)
+8. [Utility Types](#8-utility-types)
+9. [Type Assertions & `as`](#9-type-assertions--as)
+10. [`enum` vs Union Literal Types](#10-enum-vs-union-literal-types)
+11. [Function Types & Overloads](#11-function-types--overloads)
+12. [Classes & Access Modifiers](#12-classes--access-modifiers)
+13. [`readonly` and Immutability](#13-readonly-and-immutability)
+14. [Mapped & Conditional Types](#14-mapped--conditional-types)
+15. [Type Guards & `is`](#15-type-guards--is)
+16. [Modules, Declaration Files & `any`/`unknown`/`never`](#16-modules-declaration-files--anyunknownnever)
+17. [The `tsconfig.json` & Compilation Model](#17-the-tsconfigjson--compilation-model)
+18. [Rapid-Fire Interview Q&A](#18-rapid-fire-interview-qa)
+
+---
+
+## 1. What TypeScript Is & Why It Exists
+
+**TypeScript** is a **superset of JavaScript** that adds a **static type system**, developed and maintained by Microsoft — every valid JavaScript program is (nearly) valid TypeScript, but TypeScript layers compile-time type checking on top, catching a large class of bugs **before** the code ever runs, rather than discovering them at runtime (or, worse, in production).
+
+**Why this matters (commonly asked to justify, given plain JavaScript works fine "as is"):**
+- **Catches type errors at compile time**: a function expecting a `number` but accidentally called with a `string` is caught immediately by the TypeScript compiler, rather than surfacing later as a confusing runtime bug or silent incorrect behavior (ties directly to the JavaScript guide's Type Coercion section — TypeScript's entire value proposition is largely about **preventing** the class of surprising-coercion bugs discussed there).
+- **Better tooling/IDE support**: autocomplete, inline documentation, and safe refactoring (renaming a property and having the compiler flag every now-invalid usage) become dramatically more reliable with known, explicit types.
+- **Self-documenting code**: function signatures and data shapes are explicit and enforced, rather than relying on comments, naming conventions, or tribal knowledge (ties directly to the C++ guide's discussion of `const` correctness as documentation-plus-enforcement, and the Python guide's optional, unenforced type hints — TypeScript's hints, by contrast, **are** enforced at compile time).
+
+**Crucially — TypeScript's types are entirely erased at compile time (a very commonly asked, foundational fact):** TypeScript compiles down to plain JavaScript, and **all** type annotations are stripped out in the process — there is **no runtime type checking whatsoever** in compiled TypeScript output; types exist purely as a **development-time/compile-time** tool. This directly parallels the Python guide's discussion of type hints not being enforced at runtime, but with one critical difference: TypeScript's compiler **does** enforce them, just at **compile time**, before the type information is discarded — whereas Python's hints aren't enforced by the language tooling at all unless a separate tool like `mypy` is deliberately run.
+
+```typescript
+function add(a: number, b: number): number {
+    return a + b;
+}
+// Compiles to plain JS — the types are GONE:
+// function add(a, b) { return a + b; }
+```
+
+**Interview trap:** *"Does TypeScript provide any runtime type safety?"* No — since types are fully erased during compilation, a value received from an **untyped or unchecked source** at runtime (e.g., a `JSON.parse()`'d API response, user input) can still violate its declared TypeScript type with **no runtime error** — TypeScript only guarantees that **your own code**, as written, is internally type-consistent; it cannot verify that external, dynamically-obtained data actually matches the shape you've claimed it has (a very commonly asked follow-up, and the exact reason libraries like Zod, discussed implicitly via the FastAPI guide's Pydantic parallel, exist to provide **runtime** validation that TypeScript's type system alone cannot).
+
+---
+
+## 2. Structural Typing (Duck Typing for Types)
+
+TypeScript uses **structural typing** ("duck typing" for types, directly named after and conceptually identical to the duck-typing discussion in the Python guide, Section 15) — compatibility between types is determined by whether an object **has the required shape/members**, **not** by its declared type name or explicit inheritance relationship (contrasting with **nominal typing**, used by languages like Java/C++, where type compatibility depends on explicit declared relationships — e.g., `class Dog extends Animal`).
+
+```typescript
+interface Point { x: number; y: number; }
+
+function printPoint(p: Point) {
+    console.log(`${p.x}, ${p.y}`);
+}
+
+const obj = { x: 10, y: 20, z: 30 };  // NOT declared as a 'Point' — has an EXTRA property too
+printPoint(obj);  // Works fine! 'obj' structurally satisfies 'Point' (has at least x and y as numbers)
+```
+
+**Excess Property Checks — an important nuance (a very commonly tested "why does this behave differently" question):** Structural typing generally allows **extra** properties (as shown above, via the intermediate `obj` variable) — but TypeScript performs a **stricter** check specifically for **object literals passed directly** to a function/assigned directly to a typed variable, flagging any excess properties as an error in that specific case.
+```typescript
+printPoint({ x: 10, y: 20, z: 30 }); // ERROR: Object literal may only specify known properties, 'z' does not exist in type 'Point'
+// But assigning to a variable FIRST (as in the previous example) bypasses this stricter literal check
+```
+**Interview trap:** *"Why does passing an object literal directly trigger an error that passing the same shape via a variable doesn't?"* Excess property checks are a deliberate, additional safety net specifically for object literals (since a literal is unambiguously "fresh," so a likely-typo'd or unintended extra property is almost certainly a genuine mistake worth flagging) — but general structural compatibility rules (used once a value is assigned to an intermediate variable) are intentionally more permissive, allowing the common, legitimate pattern of passing a "wider" object where a "narrower" shape is expected.
+
+---
+
+## 3. `type` vs `interface`
+
+Two largely overlapping ways to name/define a shape — one of the most frequently asked "what's the difference and which should you use" TypeScript questions.
+
+```typescript
+type PointType = { x: number; y: number };
+interface PointInterface { x: number; y: number; }
+```
+
+**Key differences (commonly asked to enumerate precisely):**
+| | `type` | `interface` |
+|---|---|---|
+| Can define primitives/unions/tuples directly | Yes (`type ID = string \| number`) | No — interfaces can only describe object shapes |
+| **Declaration merging** | Not supported — redeclaring the same `type` name is an error | **Supported** — declaring the same `interface` name twice automatically **merges** both declarations into one combined shape |
+| Extending | Via intersection (`type A = B & C`) | Via `extends` (`interface A extends B`) |
+| Implementing in a class | `implements` works with either | `implements` works with either |
+| Performance (large/complex codebases) | Can occasionally be slower to type-check for very complex conditional/mapped types | Generally slightly better compiler performance for simple object shape extension, per TypeScript team guidance |
+
+**Declaration merging (a commonly asked, genuinely distinguishing `interface`-only feature):**
+```typescript
+interface Window { customProp: string; }
+interface Window { anotherProp: number; }
+// These AUTOMATICALLY merge into a single Window interface with BOTH properties —
+// this is exactly the mechanism libraries use to "augment" global/third-party types (e.g., adding a
+// custom property to the global `Window` object) without modifying the original library's source
+```
+
+**The common team/style guidance (worth citing as current best practice, commonly asked "which do you prefer"):** Use `interface` for defining public object/component shapes (especially anything that might need to be extended or merged, e.g., library-facing APIs), and `type` for unions, intersections, tuples, mapped/conditional types, and anything that isn't a plain object shape — in practice, for simple object shapes, the choice is largely stylistic/team-convention-driven, and many teams simply pick one consistently.
+
+---
+
+## 4. Basic & Special Types
+
+```typescript
+let isDone: boolean = false;
+let count: number = 42;
+let name: string = "Alice";
+let list: number[] = [1, 2, 3];
+let tuple: [string, number] = ["age", 30];    // fixed-length, fixed-type-per-position array
+let anyValue: any = "could be anything";       // opts OUT of type checking entirely (Section 16)
+let unknownValue: unknown = "safer than any";  // Section 16
+function logMessage(): void { console.log("hi"); }  // no meaningful return value
+function throwError(): never { throw new Error("always throws"); }  // NEVER returns at all (Section 16)
+let notAssigned: undefined;
+let empty: null;
+```
+
+**Tuples (worth knowing precisely, since they're a TypeScript-specific addition — plain JS has no fixed-length-typed-array concept):** A tuple enforces both a **fixed length** and a **specific type at each position** — `[string, number]` requires exactly two elements, a string then a number, in that order — commonly used for functions returning a small, fixed set of heterogeneous values (e.g., React's `useState` hook, previewed here since it'll be central to the upcoming React guide, returns a `[value, setterFunction]` tuple).
+
+---
+
+## 5. Union & Intersection Types
+
+**Union types (`|`)**: A value that can be **one of several** specified types.
+```typescript
+function printId(id: string | number) {
+    console.log(id);
+}
+printId(101);      // OK
+printId("202");    // OK
+// printId(true);  // ERROR — boolean is not part of the union
+```
+
+**Intersection types (`&`)**: Combines multiple types into **one**, requiring **all** of their members simultaneously.
+```typescript
+type Named = { name: string };
+type Aged = { age: number };
+type Person = Named & Aged;  // must have BOTH a name AND an age
+
+const p: Person = { name: "Alice", age: 30 };
+```
+
+**Union vs Intersection (a commonly asked conceptual distinction, using a mathematical framing):** A union (`|`) is like a logical **OR** — a value satisfying **any one** of the constituent types is valid; an intersection (`&`) is like a logical **AND** — a value must satisfy **all** constituent types simultaneously (structurally, this often means having the **combined set** of all properties from each type, for object-shape intersections, as shown above).
+
+**Discriminated unions (a very commonly asked, practically important pattern):** A union of object types that share a common **literal-typed property** (the "discriminant"/"tag"), letting TypeScript **narrow** (Section 6) the specific variant based on checking that property's value.
+```typescript
+type Circle = { kind: "circle"; radius: number };
+type Square = { kind: "square"; side: number };
+type Shape = Circle | Square;
+
+function area(shape: Shape): number {
+    switch (shape.kind) {
+        case "circle": return Math.PI * shape.radius ** 2;  // TS knows 'shape' is Circle here — 'radius' is safely accessible
+        case "square": return shape.side ** 2;                // TS knows 'shape' is Square here
+    }
+}
+```
+This pattern is the TypeScript-idiomatic way to model what the OOP guide's State pattern or a tagged/algebraic sum type in other languages would express — extremely common in real-world TypeScript, especially for modeling API response variants (`{status: "success", data} | {status: "error", message}`) or, as will come up directly in the React guide, component state/action variants.
+
+---
+
+## 6. Type Narrowing
+
+TypeScript's ability to **refine** a variable's type within a specific code branch, based on runtime checks — after a narrowing check, TypeScript "knows" (within that scope) that a broader type has been reduced to a more specific one, and allows accordingly-specific operations without requiring further assertions.
+
+**Common narrowing techniques (commonly asked to enumerate with examples):**
+```typescript
+function process(value: string | number) {
+    if (typeof value === "string") {
+        value.toUpperCase();   // TS knows value is 'string' here — string methods are safely available
+    } else {
+        value.toFixed(2);      // TS knows value is 'number' here (the only remaining option)
+    }
+}
+
+function handle(shape: Circle | Square) {
+    if ("radius" in shape) {   // 'in' operator narrowing — checks for property existence
+        console.log(shape.radius);
+    }
+}
+
+class Dog { bark() {} }
+class Cat { meow() {} }
+function speak(animal: Dog | Cat) {
+    if (animal instanceof Dog) {   // instanceof narrowing
+        animal.bark();
+    } else {
+        animal.meow();
+    }
+}
+```
+
+**Interview trap:** *"Why does TypeScript let you call `.toUpperCase()` on a `string | number` union inside an `if (typeof value === "string")` block, but not outside it?"* This is precisely what narrowing means — TypeScript's **control-flow analysis** tracks that within that specific branch, the runtime check guarantees the narrower type, and only permits type-specific operations within the scope where that guarantee actually holds; outside the branch (or before the check), the type remains the full, unnarrowed union, and only operations valid for **every** member of the union are permitted.
+
+---
+
+## 7. Generics
+
+*(Directly parallels the OOP guide's parametric polymorphism discussion and the C++/Java guides' Templates/Generics sections — TypeScript's specific syntax and erasure model here.)*
+
+```typescript
+function identity<T>(value: T): T {
+    return value;
+}
+identity<string>("hello");  // T explicitly specified as string
+identity(42);                // T INFERRED as number — explicit specification is often unnecessary
+
+interface Box<T> {
+    value: T;
+}
+const stringBox: Box<string> = { value: "hello" };
+
+class Stack<T> {
+    private items: T[] = [];
+    push(item: T): void { this.items.push(item); }
+    pop(): T | undefined { return this.items.pop(); }
+}
+```
+
+**Generic constraints (`extends`, commonly asked to demonstrate):**
+```typescript
+function getLength<T extends { length: number }>(item: T): number {
+    return item.length;  // safe — T is constrained to guarantee a 'length' property exists
+}
+getLength("hello");        // OK — strings have .length
+getLength([1, 2, 3]);      // OK — arrays have .length
+// getLength(42);          // ERROR — number has no .length property, violates the constraint
+```
+
+**TypeScript generics are also fully erased at compile time (reinforcing Section 1's core theme, and directly parallel to the C++ guide's template monomorphization discussion, though the underlying mechanism/trade-off differs):** Unlike C++ templates (which generate a distinct compiled version per instantiated type), TypeScript generics exist **purely** for compile-time type checking — there's only ever **one** compiled JavaScript function/class regardless of how many different type parameters it's used with, since the types are discarded entirely during compilation, exactly like Java's type-erasure model discussed in the Java guide (Section 13 there) — this is a deliberate, direct parallel worth drawing in an interview if the comparison comes up.
+
+---
+
+## 8. Utility Types
+
+Built-in generic types that transform existing types into new ones — extremely commonly used in real-world TypeScript code, and a favorite "name some utility types and what they do" interview question.
+
+```typescript
+interface User {
+    id: number;
+    name: string;
+    email: string;
+    password: string;
+}
+
+type PartialUser = Partial<User>;       // ALL properties become optional: { id?, name?, email?, password? }
+type RequiredUser = Required<User>;     // ALL properties become required (opposite of Partial)
+type ReadonlyUser = Readonly<User>;     // ALL properties become readonly (Section 13)
+type PublicUser = Omit<User, "password">;         // all properties EXCEPT the specified key(s)
+type UserCredentials = Pick<User, "email" | "password">;  // ONLY the specified key(s)
+type UserRecord = Record<string, User>;             // an object type with arbitrary string keys, all mapping to User values
+type UserIds = User["id"];                            // indexed access type — extracts the type of a specific property
+```
+
+**Commonly asked to explain the practical use case for each (a strong interview answer names a real scenario, not just the mechanical definition):**
+- **`Partial<T>`**: Modeling an "update"/PATCH-style function's input, where any subset of fields might be provided (directly parallel to the APIs & HTTP guide's PATCH semantics discussion).
+- **`Omit<T, K>`**: Defining a public-facing response type that deliberately excludes sensitive fields (directly parallel to the FastAPI guide's `response_model` filtering discussion, and the general Security guide's principle of not leaking internal fields) — e.g., `Omit<User, "password">` for an API response shape.
+- **`Pick<T, K>`**: Extracting just the subset of fields relevant to a specific, narrower operation (e.g., a login form only needing `email` and `password` out of a larger `User` shape).
+- **`Record<K, V>`**: Typing dictionary/map-like objects with a consistent value type (a very common pattern for lookup tables, caches, grouped data).
+
+**`ReturnType<T>` and `Parameters<T>` (worth knowing exist, less commonly used but occasionally probed):** Extract the return type or parameter tuple type of a given function type — useful for deriving types from existing functions without manually re-declaring them, keeping types DRY and in sync with the actual implementation.
+
+---
+
+## 9. Type Assertions & `as`
+
+Tells the TypeScript compiler **"trust me, I know this value's actual type better than you've inferred it"** — a compile-time-only override that does **not** perform any actual runtime conversion or check (directly reinforcing Section 1's type-erasure theme).
+
+```typescript
+const input = document.getElementById("username") as HTMLInputElement;
+// TypeScript's built-in DOM types only know getElementById returns 'HTMLElement | null' generically —
+// 'as HTMLInputElement' asserts a MORE SPECIFIC type, without any runtime verification that it's actually correct
+
+input.value = "hello";  // only valid on HTMLInputElement (not the generic HTMLElement) — 'as' unlocked this
+```
+
+**Interview trap:** *"Does `as SomeType` actually convert or validate the value?"* No — it's purely a **compile-time** instruction telling the type checker to treat the value as the asserted type going forward; if the assertion is actually **wrong** (the value doesn't genuinely have that shape at runtime), TypeScript provides **no** protection whatsoever — the resulting bug would only surface as an ordinary runtime JavaScript error (e.g., calling a method that doesn't actually exist on the real object) once that incorrect assumption is exercised. This is exactly why type assertions should be used sparingly and only when you have genuine external certainty (e.g., DOM APIs, or a value whose shape you've already runtime-validated through some other means) — overuse of `as` effectively opts out of TypeScript's core safety guarantees for that specific value.
+
+**`as const` (a distinct, differently-purposed use of `as`, commonly asked to explain):** Narrows a literal value to its **most specific possible type** (rather than the broader inferred type), and makes it **deeply readonly**.
+```typescript
+let a = "hello";           // inferred type: string (the general type)
+let b = "hello" as const;  // inferred type: "hello" (the specific literal type, not the general string)
+
+const arr = [1, 2, 3] as const;  // type: readonly [1, 2, 3] — a readonly TUPLE of these exact literal values, not number[]
+```
+Commonly used with discriminated unions (Section 5) and configuration objects, where you want TypeScript to infer the **narrowest, most specific** literal types rather than widening them to their general base type.
+
+---
+
+## 10. `enum` vs Union Literal Types
+
+**`enum`**: A TypeScript-specific construct defining a named set of constants.
+```typescript
+enum Direction {
+    Up,     // 0
+    Down,   // 1
+    Left,   // 2
+    Right,  // 3
+}
+enum Status {
+    Active = "ACTIVE",     // string enums — explicit values, no auto-incrementing
+    Inactive = "INACTIVE",
+}
+```
+
+**Union of string literals (the commonly preferred modern alternative, commonly asked "why would you prefer this over enum"):**
+```typescript
+type Direction = "up" | "down" | "left" | "right";
+function move(dir: Direction) { ... }
+```
+
+**`enum` vs literal union (a commonly asked, somewhat opinionated comparison, worth being able to articulate the trade-offs):**
+| | `enum` | String literal union |
+|---|---|---|
+| Runtime footprint | Generates **actual JavaScript code** at compile time (an object) — not fully erased, unlike most TS type constructs | **Fully erased** — zero runtime footprint, purely a compile-time construct (consistent with Section 1's general theme) |
+| Numeric enums' implicit values | Can be a source of confusing bugs (auto-incrementing values, and numeric enums allow assigning **any** number, not just declared members, due to how TS numeric enums are structurally checked) | N/A — string literals are exact, explicit values with no such loophole |
+| Interop/simplicity | An additional TS-specific concept to learn, with quirks | Just plain, ordinary strings — simpler mental model, works naturally with generic string-based tooling (e.g., serialization) |
+| Common modern guidance | Increasingly discouraged in idiomatic modern TypeScript codebases (including some official TS team commentary favoring alternatives) | Generally the preferred default for representing a fixed, small set of known string values |
+
+**Interview trap:** *"Are TypeScript enums erased at compile time like other type constructs?"* No — this is a **notable exception** to the general type-erasure rule (Section 1): `enum` actually generates real, executable JavaScript object code at compile time (unlike an `interface`, `type`, or generic type parameter, which are purely compile-time and leave zero runtime trace) — a commonly asked, easy-to-miss distinguishing fact.
+
+---
+
+## 11. Function Types & Overloads
+
+```typescript
+// Function type expressions
+let add: (a: number, b: number) => number;
+add = (a, b) => a + b;
+
+// Optional and default parameters
+function greet(name: string, greeting?: string): string {
+    return `${greeting ?? "Hello"}, ${name}`;
+}
+
+// Function overloads — multiple call signatures for a single implementation
+function makeDate(timestamp: number): Date;
+function makeDate(year: number, month: number, day: number): Date;
+function makeDate(yearOrTimestamp: number, month?: number, day?: number): Date {
+    if (month !== undefined && day !== undefined) {
+        return new Date(yearOrTimestamp, month, day);
+    }
+    return new Date(yearOrTimestamp);
+}
+```
+
+**Function overloads (a commonly asked concept, directly parallel to the OOP guide's method overloading discussion, but with an important TypeScript-specific twist):** You declare multiple **call signatures** (the overload declarations), followed by a **single implementation signature** that must be general enough to handle all the declared overload cases — callers only ever see/can use the declared overload signatures, not the broader implementation signature directly, letting you present a precise, type-safe public API for a function whose actual implementation needs a more permissive/general internal signature to satisfy all the declared variants.
+
+---
+
+## 12. Classes & Access Modifiers
+
+*(Directly builds on the OOP guide's Access Modifiers discussion, and JavaScript's `class` syntax from the JavaScript guide, Section 9 — TypeScript adds compile-time-enforced access control on top of JS's native `#private` fields.)*
+
+```typescript
+class Animal {
+    private name: string;       // TypeScript-enforced, COMPILE-TIME ONLY — erased at runtime (see below)
+    protected age: number;       // accessible in this class and subclasses, compile-time only
+    public species: string;      // accessible everywhere (the default if omitted)
+    readonly id: number;         // can only be assigned once, typically in the constructor (Section 13)
+
+    constructor(name: string, age: number, species: string, id: number) {
+        this.name = name; this.age = age; this.species = species; this.id = id;
+    }
+}
+```
+
+**TypeScript's `private` vs JavaScript's native `#private` (a very commonly asked, genuinely important distinction, ties directly to the JavaScript guide's Section 9 discussion of true private fields):**
+| | TypeScript `private` keyword | JavaScript `#private` field |
+|---|---|---|
+| Enforcement | **Compile-time only** — erased at runtime, like all TS-specific syntax | **Runtime-enforced** by the JavaScript engine itself — genuinely inaccessible, even via workarounds |
+| Bypassable at runtime? | **Yes** — since it's erased, plain JS code (or a type assertion, Section 9, bypassing the compiler check) can still access it at runtime | **No** — a true language-level privacy guarantee |
+
+**Interview trap:** *"Is TypeScript's `private` keyword a genuine runtime security/privacy guarantee?"* No — it's a **compile-time-only** convention, erased along with all other TypeScript-specific syntax; a value marked `private` is still an ordinary, fully accessible JavaScript property at runtime, accessible via plain JS interop, `(obj as any).name`, or simple bracket-notation access — for a **genuine**, runtime-enforced privacy guarantee, use JavaScript's native `#privateField` syntax instead, which TypeScript also fully supports and type-checks.
+
+**Parameter properties (a TypeScript-specific shorthand, commonly asked to recognize):**
+```typescript
+class Animal {
+    constructor(private name: string, public age: number) {}
+    // shorthand for declaring AND assigning both 'name' and 'age' as fields, in one line —
+    // equivalent to declaring them separately and writing `this.name = name; this.age = age;` in the body
+}
+```
+
+---
+
+## 13. `readonly` and Immutability
+
+*(Directly ties to the OOP guide's Immutability section and the JavaScript guide's `const` discussion.)*
+
+```typescript
+interface Point { readonly x: number; readonly y: number; }
+const p: Point = { x: 1, y: 2 };
+// p.x = 5;  // ERROR — cannot assign to 'x' because it is a read-only property
+
+const arr: readonly number[] = [1, 2, 3];
+// arr.push(4);  // ERROR — push doesn't exist on a readonly array type (mutating methods are excluded from its type)
+```
+
+**`readonly` vs `const` (a commonly asked distinction, since they seem similar but apply at different levels):** `const` (a JavaScript, not TypeScript-specific, keyword, ties to the JavaScript guide's Section 3) prevents **reassigning a variable binding**; `readonly` (a TypeScript-specific type-system feature) prevents **reassigning a specific property** on an object/interface — you can have a `const` variable holding an object with **mutable** (non-`readonly`) properties (the JS guide's exact `const arr = [...]; arr.push(4)` example), and conversely, a `readonly`-typed property could theoretically still be reached and mutated through a differently-typed (non-readonly) alias to the same underlying object, since — like everything else covered in this section — `readonly` is a **compile-time-only** constraint, not a runtime immutability guarantee (reinforcing Section 1's central theme once again).
+
+**`readonly` is shallow (a very commonly tested nuance, directly parallel to the JavaScript guide's shallow-spread-copy discussion and `Object.freeze`'s shallow-only behavior):** Marking a property `readonly` only prevents reassigning **that property itself** — if the property's value is itself an object/array, that nested object's **own** properties remain fully mutable unless **they're** also independently marked `readonly`.
+```typescript
+interface Config { readonly settings: { theme: string } }
+const config: Config = { settings: { theme: "dark" } };
+// config.settings = {...};        // ERROR — can't reassign 'settings' itself
+config.settings.theme = "light";   // ALLOWED — 'theme' inside 'settings' isn't independently marked readonly
+```
+
+---
+
+## 14. Mapped & Conditional Types
+
+More advanced type-system features, commonly asked about in senior/deeper interviews — worth understanding conceptually even if writing complex ones from scratch isn't expected in every interview.
+
+**Mapped types** (the mechanism behind how `Partial<T>`/`Readonly<T>`/`Pick<T, K>` etc. are actually implemented internally, worth knowing this connects Section 8's utility types to a general, reusable mechanism):
+```typescript
+type MyPartial<T> = {
+    [K in keyof T]?: T[K];   // iterate over every key K of T, making each optional (?) and reusing its original type
+};
+```
+
+**Conditional types** (type-level `if`/`else`, based on a type relationship check):
+```typescript
+type IsString<T> = T extends string ? "yes" : "no";
+type A = IsString<string>;  // "yes"
+type B = IsString<number>;  // "no"
+```
+
+**`infer` (used within conditional types to extract/capture a sub-type, worth knowing this exists, especially since it's how `ReturnType<T>` from Section 8 is actually implemented internally):**
+```typescript
+type MyReturnType<T> = T extends (...args: any[]) => infer R ? R : never;
+// "if T is a function type, INFER (capture) its return type as R, and give back R; otherwise never"
+```
+
+**Interview framing tip (worth stating if this topic comes up, rather than attempting to derive complex conditional types live under pressure unless specifically asked to):** Most day-to-day TypeScript work relies on the **built-in** utility types (Section 8) rather than hand-writing custom mapped/conditional types — but understanding that those utility types are themselves **just** ordinary mapped/conditional types defined in TypeScript's own standard library (not special compiler magic) is a strong signal of genuine, deeper type-system understanding.
+
+---
+
+## 15. Type Guards & `is`
+
+**Custom type guard functions** — user-defined functions that narrow a type (Section 6) based on custom logic, using the special `parameterName is Type` return type annotation.
+
+```typescript
+interface Fish { swim(): void; }
+interface Bird { fly(): void; }
+
+function isFish(pet: Fish | Bird): pet is Fish {   // the 'pet is Fish' return type IS the type guard
+    return (pet as Fish).swim !== undefined;
+}
+
+function move(pet: Fish | Bird) {
+    if (isFish(pet)) {
+        pet.swim();   // TS narrows 'pet' to 'Fish' inside this block, based on the custom type guard function
+    } else {
+        pet.fly();     // narrowed to 'Bird' in the else branch
+    }
+}
+```
+
+**Why this matters (commonly asked to articulate, given `typeof`/`instanceof`/`in` narrowing from Section 6 already exist):** Custom type guards let you encapsulate **arbitrary, more complex narrowing logic** (that can't be expressed by a simple `typeof`/`instanceof`/`in` check alone) into a **reusable** function, while still giving the TypeScript compiler the same narrowing benefit within any code that calls it — a direct, practical extension of Section 6's narrowing mechanism for cases needing custom validation logic (e.g., validating an object's shape matches an interface at a runtime API boundary, tying back to Section 1's discussion of TypeScript needing external runtime validation for genuinely untrusted/external data).
+
+---
+
+## 16. Modules, Declaration Files & `any`/`unknown`/`never`
+
+**`any` vs `unknown` (an extremely commonly asked, critical distinction — arguably one of the most important TypeScript-specific interview questions):**
+```typescript
+let a: any = "hello";
+a.foo.bar.baz();       // COMPILES FINE — 'any' completely opts out of type checking, even for clearly invalid operations
+a();                    // also compiles fine — no safety at all
+
+let u: unknown = "hello";
+// u.toUpperCase();     // ERROR — TypeScript won't let you operate on 'unknown' without narrowing it first
+if (typeof u === "string") {
+    u.toUpperCase();    // OK — now narrowed (Section 6) to 'string', safe to use
+}
+```
+**`any`**: Completely **disables** type checking for that value — you can do anything with it, and TypeScript won't complain, even for operations that would clearly fail at runtime; effectively "opting out" of TypeScript's safety for that value entirely.
+**`unknown`**: The **type-safe** counterpart — represents "a value of some type I don't yet know," but **requires narrowing** (a type guard, `typeof`, `instanceof`, etc.) before you're allowed to perform **any** operation on it — forces you to actually verify the value's shape before using it, rather than silently trusting an unverified assumption.
+
+**Interview trap / universally cited best practice:** Prefer `unknown` over `any` whenever a value's type is genuinely not known upfront (e.g., a `catch` block's error parameter, or parsed JSON from an external API) — `any` is a common, understandable source of "TypeScript let a bug through" complaints, since it silently disables the compiler's protection for anything it touches (and, notably, **any** value assigned from an `any`-typed source **also** becomes implicitly `any`, letting the lack of safety silently "leak" through a codebase); `unknown` provides the same flexibility for genuinely-uncertain values while still forcing an explicit, deliberate narrowing step before use.
+
+**`never`**: Represents a value that **can never actually occur** — used for functions that always throw or never return (as shown in Section 4), and notably, as a powerful tool for **exhaustiveness checking** in a discriminated union `switch` statement (Section 5):
+```typescript
+function assertUnreachable(x: never): never {
+    throw new Error("Didn't expect to get here");
+}
+function area(shape: Circle | Square): number {
+    switch (shape.kind) {
+        case "circle": return Math.PI * shape.radius ** 2;
+        case "square": return shape.side ** 2;
+        default: return assertUnreachable(shape); // if a NEW shape variant is added later but not handled above,
+                                                     // TypeScript will error HERE at compile time, since 'shape'
+                                                     // would no longer be assignable to 'never' in that default case
+    }
+}
+```
+**Interview trap:** *"What's the practical benefit of the `never`-based exhaustiveness-check pattern?"* If someone later adds a new variant to the `Shape` union (e.g., a `Triangle`) but forgets to add a corresponding `case` in this `switch`, the `default` branch's `shape` would no longer be assignable to `never` (since it's now some **unhandled** remaining type) — producing an **immediate compile-time error** at the exact spot the new case needs handling, rather than a silent runtime bug from a forgotten switch case — a genuinely valuable, commonly cited real-world pattern.
+
+**Declaration files (`.d.ts`, worth knowing exist even if not writing them daily):** Files containing **only type information**, no actual implementation — used to provide TypeScript type definitions for plain JavaScript libraries that don't ship their own types (the massive community-maintained `@types/*` package ecosystem, e.g., `@types/react`, `@types/node`, exists specifically for this purpose) — letting you get full type-checking/autocomplete benefits even when consuming an untyped JS library.
+
+---
+
+## 17. The `tsconfig.json` & Compilation Model
+
+**`tsc` (the TypeScript compiler)**: Type-checks the code **and** transpiles/strips it down to plain JavaScript (targeting a specified ECMAScript version) — the actual compiled output is ordinary JavaScript with all type annotations removed (reinforcing Section 1's theme one final time).
+
+**Commonly asked-about `tsconfig.json` options:**
+- **`strict: true`**: Enables a bundle of strict type-checking flags at once (`strictNullChecks`, `noImplicitAny`, and others) — strongly recommended for any real project, since it catches significantly more potential bugs; many of the "gotchas" discussed throughout this guide (like `unknown` requiring narrowing) are specifically **enforced** by strict mode.
+- **`strictNullChecks`**: Without this, `null`/`undefined` are (unsoundly) assignable to **any** type by default, silently permitting a huge class of "cannot read property of undefined"-style runtime errors that TypeScript would otherwise be able to catch — enabling it forces explicit handling of potentially-`null`/`undefined` values (e.g., via optional chaining `?.` or explicit checks) wherever they're genuinely possible.
+- **`noImplicitAny`**: Requires an **explicit** type annotation (or a type TypeScript can successfully infer) for any value the compiler would otherwise be forced to silently treat as `any` — preventing type-safety gaps from silently and invisibly creeping into a codebase.
+- **`target`**: Which ECMAScript version the compiled JavaScript output should conform to (e.g., `ES2020`, `ES5` for maximum legacy browser compatibility) — affects what native JS features (like optional chaining, if targeting a very old version) get compiled down into more verbose equivalent code rather than being emitted directly.
+
+**Interview trap:** *"If TypeScript catches type errors at compile time, why does `strictNullChecks` matter so much specifically?"* Without it, TypeScript's type system has a significant, well-known **unsoundness** — since `null`/`undefined` can silently satisfy any type, a huge proportion of real-world JavaScript's most common runtime error class ("cannot read property of undefined") would go completely **undetected** by the type checker despite TypeScript otherwise claiming to guarantee type safety — `strictNullChecks` closes this specific, historically significant gap, and is considered close to non-negotiable in any serious modern TypeScript project.
+
+---
+
+## 18. Rapid-Fire Interview Q&A
+
+**Q: Are TypeScript types checked or enforced at runtime?**
+No — types are used purely for compile-time checking and are completely erased from the compiled JavaScript output; there is zero runtime type safety from TypeScript's type system alone (external/untrusted data still needs runtime validation via a separate tool).
+
+**Q: What is structural typing, and how does it differ from nominal typing (Java/C++)?**
+Structural typing determines type compatibility based on whether a value has the required shape/members, regardless of its declared type name; nominal typing (Java/C++) requires an explicit, declared inheritance/implementation relationship — TypeScript uses the former.
+
+**Q: `type` vs `interface` — what's the one genuinely distinguishing feature?**
+Declaration merging — redeclaring the same `interface` name automatically merges both declarations into one combined shape; `type` has no equivalent, and redeclaring a `type` name is an error.
+
+**Q: `any` vs `unknown` — why is `unknown` generally preferred?**
+`any` completely disables type checking for that value (and silently "infects" anything assigned from it); `unknown` requires explicit narrowing before any operation is permitted, preserving type safety for genuinely uncertain values.
+
+**Q: Is TypeScript's `private` keyword a genuine runtime privacy guarantee?**
+No — it's compile-time-only and fully erased at runtime, so the property remains an ordinary accessible JavaScript property in the compiled output; JavaScript's native `#privateField` syntax provides genuine runtime-enforced privacy instead.
+
+**Q: What's the practical value of a discriminated union combined with a `never`-based exhaustiveness check?**
+It converts a forgotten `switch` case (for a newly added union variant) into an immediate compile-time error rather than a silent runtime bug, since the unhandled case would no longer be assignable to `never` in the default branch.
+
+**Q: Why does `strictNullChecks` matter so much specifically?**
+Without it, `null`/`undefined` are unsoundly assignable to any type, meaning the type checker misses one of the most common real-world JavaScript runtime error classes entirely; enabling it forces explicit handling of potentially-nullish values.
+
+**Q: Are TypeScript enums erased at compile time like other type-only constructs?**
+No — unlike `interface`, `type`, and generic type parameters (all fully erased), `enum` actually generates real, executable JavaScript object code in the compiled output, a notable exception to TypeScript's general type-erasure model.
+
+**Q: What's the difference between `readonly` and `const`?**
+`const` prevents reassigning a variable binding (a JavaScript-level concept); `readonly` prevents reassigning a specific object property (a TypeScript-level, compile-time-only concept) — and both are shallow, not deeply enforcing immutability of nested values.
+
+---
+
+## Suggested Study Approach
+1. Be able to explain type erasure fluently and its practical consequence (no runtime safety for external data) — this is the single most foundational, most frequently probed TypeScript concept, and the thread nearly every other topic in this guide ties back to.
+2. Practice the `any` vs `unknown` distinction and the discriminated-union-plus-`never`-exhaustiveness-check pattern until they're instant, precise answers — both are extremely commonly asked, high-signal questions.
+3. Rehearse writing a discriminated union with a narrowing `switch` from scratch — a common live-coding request that tests union types, narrowing, and exhaustiveness checking together.
+4. Pair this guide with the JavaScript guide (TypeScript adds a type layer on top of every JS concept covered there — closures, `this`, prototypes, Promises all still apply identically) and anticipate the upcoming React guide, where typed props/state/hooks (especially the tuple-typed `useState` return, previewed in Section 4) will build directly on everything here.
+5. Be ready to discuss `tsconfig.json`'s `strict` mode and why it's considered close to mandatory for serious projects — a common "how would you configure a new project" practical question.

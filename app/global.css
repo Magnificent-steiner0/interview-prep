@@ -1,0 +1,10 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Fumadocs ships its own component styles; this file is where you layer
+   your own brand tweaks (accent color, fonts) on top of the preset. */
+
+:root {
+  --fd-layout-width: 1400px;
+}

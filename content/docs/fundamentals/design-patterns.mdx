@@ -1,0 +1,994 @@
+---
+title: "Design Patterns"
+description: "Design patterns are reusable, proven solutions to recurring software design problems. Interviewers test whether you can (1) recognize *when* a pattern applies, (2) implement it ..."
+---
+Design patterns are reusable, proven solutions to recurring software design problems. Interviewers test whether you can (1) recognize *when* a pattern applies, (2) implement it cleanly, and (3) discuss trade-offs vs. alternatives. For each pattern below: **Intent → UML (textual) → Code → Real-world example → Pros/Cons**.
+
+---
+
+## Table of Contents
+1. [Creational Patterns](#creational-patterns)
+   - Singleton
+   - Factory Method
+   - Abstract Factory
+   - Builder
+   - Prototype
+2. [Structural Patterns](#structural-patterns)
+   - Adapter
+   - Bridge
+   - Composite
+   - Decorator
+   - Facade
+   - Flyweight
+   - Proxy
+3. [Behavioral Patterns](#behavioral-patterns)
+   - Observer
+   - Strategy
+   - State
+   - Command
+   - Template Method
+   - Chain of Responsibility
+   - Mediator
+   - Iterator
+   - Visitor
+   - Memento
+4. [Pattern Selection Cheat Sheet](#pattern-selection-cheat-sheet)
+5. [Rapid-Fire Interview Q&A](#rapid-fire-interview-qa)
+
+---
+
+# Creational Patterns
+*Deal with object creation mechanisms, trying to create objects in a manner suitable to the situation, hiding creation logic rather than instantiating directly with `new`.*
+
+## Singleton
+
+**Intent:** Ensure a class has only one instance and provide a global point of access to it.
+
+**UML:**
+```
++----------------+
+|   Singleton    |
++----------------+
+| -instance      |
++----------------+
+| -Singleton()   |
+| +getInstance() |
++----------------+
+```
+
+**Code (thread-safe, lazy, double-checked locking — Java):**
+```java
+class Singleton {
+    private static volatile Singleton instance;
+    private Singleton() { } // private constructor blocks external instantiation
+
+    public static Singleton getInstance() {
+        if (instance == null) {
+            synchronized (Singleton.class) {
+                if (instance == null) {
+                    instance = new Singleton();
+                }
+            }
+        }
+        return instance;
+    }
+}
+```
+`volatile` prevents instruction reordering issues so another thread never sees a partially-constructed object.
+
+**Simpler alternative (eager initialization):**
+```java
+class Singleton {
+    private static final Singleton INSTANCE = new Singleton();
+    private Singleton() { }
+    public static Singleton getInstance() { return INSTANCE; }
+}
+```
+Trades a small amount of startup cost/memory for simplicity and thread-safety without locking.
+
+**Real-world examples:** Logger, configuration manager, connection pool, cache manager, thread pool.
+
+**Pros:** Controlled access to sole instance; lazy initialization possible; saves memory for expensive-to-create objects.
+**Cons:** Introduces **global state** (harder to test/mock — often called an anti-pattern for this reason), violates SRP (manages both its own lifecycle and its business logic), hides dependencies (classes silently call `getInstance()` instead of declaring the dependency explicitly), tricky in multithreaded environments if not implemented carefully.
+
+**Interview trap:** *"Why is Singleton controversial?"* Because it's essentially glorified global state — it makes unit testing hard (can't easily substitute a mock) and creates hidden coupling. Prefer dependency injection of a singleton-scoped object over a self-managed static singleton where possible.
+
+---
+
+## Factory Method
+
+**Intent:** Define an interface for creating an object, but let subclasses decide which class to instantiate. Defers instantiation to subclasses.
+
+**UML:**
+```
+Creator (abstract)          Product (interface)
+  +factoryMethod()  ------->  
+       ^                         ^
+       |                         |
+ConcreteCreatorA          ConcreteProductA
+ConcreteCreatorB          ConcreteProductB
+```
+
+**Code:**
+```java
+interface Notification { void notifyUser(); }
+class EmailNotification implements Notification {
+    public void notifyUser() { System.out.println("Sending Email"); }
+}
+class SMSNotification implements Notification {
+    public void notifyUser() { System.out.println("Sending SMS"); }
+}
+
+abstract class NotificationFactory {
+    abstract Notification createNotification(); // the factory method
+
+    void notify() {
+        Notification n = createNotification();
+        n.notifyUser();
+    }
+}
+class EmailFactory extends NotificationFactory {
+    Notification createNotification() { return new EmailNotification(); }
+}
+class SMSFactory extends NotificationFactory {
+    Notification createNotification() { return new SMSNotification(); }
+}
+```
+
+**Real-world examples:** `java.util.Calendar.getInstance()`, UI toolkits creating platform-specific buttons/dialogs, ORM frameworks creating DB-specific connection objects.
+
+**Pros:** Decouples client code from concrete classes (adheres to OCP — new product types added without touching client code); centralizes creation logic.
+**Cons:** Requires creating a new subclass for every new product type, which can lead to class explosion.
+
+---
+
+## Abstract Factory
+
+**Intent:** Provide an interface for creating **families of related/dependent objects** without specifying their concrete classes.
+
+**Difference from Factory Method (frequently asked):** Factory Method creates **one** product via inheritance (subclassing). Abstract Factory creates **families of related products** via composition (an object holding a factory reference).
+
+**Code:**
+```java
+// Product families: Button and Checkbox, each with Mac/Windows variants
+interface Button { void render(); }
+interface Checkbox { void render(); }
+
+class MacButton implements Button { public void render() { System.out.println("Mac Button"); } }
+class WinButton implements Button { public void render() { System.out.println("Windows Button"); } }
+class MacCheckbox implements Checkbox { public void render() { System.out.println("Mac Checkbox"); } }
+class WinCheckbox implements Checkbox { public void render() { System.out.println("Windows Checkbox"); } }
+
+interface GUIFactory {
+    Button createButton();
+    Checkbox createCheckbox();
+}
+class MacFactory implements GUIFactory {
+    public Button createButton() { return new MacButton(); }
+    public Checkbox createCheckbox() { return new MacCheckbox(); }
+}
+class WinFactory implements GUIFactory {
+    public Button createButton() { return new WinButton(); }
+    public Checkbox createCheckbox() { return new WinCheckbox(); }
+}
+
+// Client only depends on GUIFactory — guaranteed consistent family (all Mac or all Windows)
+class Application {
+    private Button button;
+    private Checkbox checkbox;
+    Application(GUIFactory factory) {
+        button = factory.createButton();
+        checkbox = factory.createCheckbox();
+    }
+}
+```
+
+**Real-world examples:** Cross-platform UI toolkits, database driver families (JDBC drivers for different DBs), theming systems.
+
+**Pros:** Guarantees compatible products are used together (e.g., won't accidentally mix a Mac button with a Windows checkbox); isolates concrete classes from client.
+**Cons:** Adding a new product **type** (e.g., adding `Slider` to the family) requires modifying every factory — violates OCP at that axis.
+
+---
+
+## Builder
+
+**Intent:** Separate the construction of a complex object from its representation, so the same construction process can create different representations. Useful when a constructor would otherwise need many optional parameters ("telescoping constructor" problem).
+
+**Code:**
+```java
+class Pizza {
+    private final String size;      // required
+    private final boolean cheese;   // optional
+    private final boolean pepperoni;// optional
+    private final boolean mushrooms;// optional
+
+    private Pizza(Builder b) {
+        this.size = b.size;
+        this.cheese = b.cheese;
+        this.pepperoni = b.pepperoni;
+        this.mushrooms = b.mushrooms;
+    }
+
+    static class Builder {
+        private final String size; // required, passed to constructor
+        private boolean cheese, pepperoni, mushrooms; // default false
+
+        Builder(String size) { this.size = size; }
+        Builder addCheese() { cheese = true; return this; }
+        Builder addPepperoni() { pepperoni = true; return this; }
+        Builder addMushrooms() { mushrooms = true; return this; }
+        Pizza build() { return new Pizza(this); }
+    }
+}
+
+// Usage — fluent, readable, no telescoping constructors
+Pizza pizza = new Pizza.Builder("Large")
+                    .addCheese()
+                    .addPepperoni()
+                    .build();
+```
+
+**Real-world examples:** `StringBuilder`, HTTP request builders (e.g., `OkHttp.Request.Builder`), SQL query builders, `Lombok @Builder`.
+
+**Pros:** Readable, avoids constructor overload explosion; enables step-by-step construction and immutable final objects; can validate combinations before `build()`.
+**Cons:** More boilerplate code (a separate Builder class); overkill for simple objects with few fields.
+
+---
+
+## Prototype
+
+**Intent:** Create new objects by **copying (cloning)** an existing object (the "prototype") rather than instantiating from scratch — useful when object creation is expensive or complex.
+
+**Code:**
+```java
+interface Prototype extends Cloneable {
+    Prototype clone();
+}
+class Sheep implements Prototype {
+    String name;
+    int age;
+    Sheep(String name, int age) { this.name = name; this.age = age; }
+    public Sheep clone() { return new Sheep(this.name, this.age); } // deep copy if fields are mutable objects
+}
+
+Sheep dolly = new Sheep("Dolly", 1);
+Sheep clone1 = dolly.clone();
+```
+
+**Shallow vs Deep copy (commonly probed):**
+- **Shallow copy:** Copies field values; if a field is a reference to a mutable object, both original and clone share the *same* referenced object (mutating one affects the other).
+- **Deep copy:** Recursively copies all referenced objects too, so the clone is fully independent.
+
+**Real-world examples:** `Object.clone()` in Java, JavaScript's `Object.assign()`/spread operator patterns, game engines cloning pre-configured entity templates (e.g., spawning many enemies from one template).
+
+**Pros:** Avoids costly re-initialization (e.g., re-querying a DB or re-parsing config to build a similar object); reduces subclassing needed just to vary initial state.
+**Cons:** Cloning objects with complex circular references can be tricky (need careful deep-copy logic); clone methods can become error-prone to maintain as classes evolve.
+
+---
+
+# Structural Patterns
+*Deal with how classes/objects are composed to form larger, flexible structures while keeping them efficient and decoupled.*
+
+## Adapter
+
+**Intent:** Convert the interface of a class into another interface clients expect, letting incompatible interfaces work together.
+
+**Code:**
+```java
+// Existing incompatible interface
+class EuropeanSocket { void plugTypeC() { System.out.println("220V Type C"); } }
+
+// Target interface the client expects
+interface USPlug { void plugTypeA(); }
+
+// Adapter bridges the two
+class SocketAdapter implements USPlug {
+    private EuropeanSocket socket;
+    SocketAdapter(EuropeanSocket socket) { this.socket = socket; }
+    public void plugTypeA() {
+        System.out.println("Adapting...");
+        socket.plugTypeC();
+    }
+}
+```
+
+**Real-world examples:** Java's `Arrays.asList()` (adapts array to `List` interface), wrapping a third-party payment SDK to match your internal `PaymentGateway` interface, legacy system integration.
+
+**Pros:** Lets incompatible interfaces work together without modifying existing code; promotes reuse of legacy/third-party code.
+**Cons:** Adds an extra layer of indirection; overuse can make the system harder to trace.
+
+---
+
+## Bridge
+
+**Intent:** Decouple an abstraction from its implementation so the two can vary independently — split a class hierarchy into two orthogonal hierarchies connected by composition instead of one exploding combined hierarchy.
+
+**Problem it solves:** Without Bridge, if you have shapes (Circle, Square) × colors (Red, Blue), inheritance forces `RedCircle`, `BlueCircle`, `RedSquare`, `BlueSquare` — combinatorial explosion.
+
+**Code:**
+```java
+interface Color { String fill(); }
+class Red implements Color { public String fill() { return "Red"; } }
+class Blue implements Color { public String fill() { return "Blue"; } }
+
+abstract class Shape {
+    protected Color color; // bridge: composition, not inheritance
+    Shape(Color color) { this.color = color; }
+    abstract void draw();
+}
+class Circle extends Shape {
+    Circle(Color color) { super(color); }
+    void draw() { System.out.println(color.fill() + " Circle"); }
+}
+class Square extends Shape {
+    Square(Color color) { super(color); }
+    void draw() { System.out.println(color.fill() + " Square"); }
+}
+
+new Circle(new Red()).draw();  // Red Circle — 2 hierarchies (Shape, Color), no explosion
+```
+
+**Real-world examples:** JDBC (driver abstraction over different databases), cross-platform rendering engines (Shape abstraction over different rendering APIs).
+
+**Pros:** Avoids class explosion; abstraction and implementation can evolve independently; improves extensibility.
+**Cons:** Increases design complexity/indirection upfront — only worth it when you genuinely expect two independent dimensions of variation.
+
+**Bridge vs Adapter (frequently confused):** Adapter is applied **after the fact** to make existing incompatible interfaces work together. Bridge is designed **upfront** to intentionally decouple abstraction from implementation before either grows.
+
+---
+
+## Composite
+
+**Intent:** Compose objects into tree structures to represent part-whole hierarchies, letting clients treat individual objects and compositions of objects **uniformly**.
+
+**Code:**
+```java
+interface FileSystemComponent {
+    void showDetails();
+}
+class File implements FileSystemComponent {
+    String name;
+    File(String name) { this.name = name; }
+    public void showDetails() { System.out.println("File: " + name); }
+}
+class Folder implements FileSystemComponent {
+    String name;
+    List<FileSystemComponent> children = new ArrayList<>();
+    Folder(String name) { this.name = name; }
+    void add(FileSystemComponent c) { children.add(c); }
+    public void showDetails() {
+        System.out.println("Folder: " + name);
+        for (FileSystemComponent c : children) c.showDetails(); // uniform treatment
+    }
+}
+
+Folder root = new Folder("root");
+root.add(new File("a.txt"));
+Folder sub = new Folder("sub");
+sub.add(new File("b.txt"));
+root.add(sub);
+root.showDetails(); // recursively prints entire tree
+```
+
+**Real-world examples:** File system (files/folders), UI component trees (a `Panel` containing `Button`s and other `Panel`s), organization charts.
+
+**Pros:** Client code doesn't need to distinguish leaf vs. composite nodes — simplifies client logic; makes it easy to add new component types.
+**Cons:** Can make the design overly general — hard to restrict what types of children a component may have (a `File` shouldn't have children, but the shared interface doesn't naturally prevent misuse without extra checks).
+
+---
+
+## Decorator
+
+**Intent:** Attach additional responsibilities to an object **dynamically**, without modifying its class — a flexible alternative to subclassing for extending functionality.
+
+**Code:**
+```java
+interface Coffee { double cost(); String description(); }
+
+class SimpleCoffee implements Coffee {
+    public double cost() { return 2.0; }
+    public String description() { return "Coffee"; }
+}
+
+abstract class CoffeeDecorator implements Coffee {
+    protected Coffee decorated;
+    CoffeeDecorator(Coffee c) { this.decorated = c; }
+}
+class MilkDecorator extends CoffeeDecorator {
+    MilkDecorator(Coffee c) { super(c); }
+    public double cost() { return decorated.cost() + 0.5; }
+    public String description() { return decorated.description() + " + Milk"; }
+}
+class SugarDecorator extends CoffeeDecorator {
+    SugarDecorator(Coffee c) { super(c); }
+    public double cost() { return decorated.cost() + 0.2; }
+    public String description() { return decorated.description() + " + Sugar"; }
+}
+
+Coffee order = new SugarDecorator(new MilkDecorator(new SimpleCoffee()));
+System.out.println(order.description() + " = $" + order.cost()); // Coffee + Milk + Sugar = $2.7
+```
+
+**Real-world examples:** Java I/O streams (`new BufferedReader(new InputStreamReader(new FileInputStream(...)))`), UI toolkit widget wrapping (scrollbars, borders), middleware chains.
+
+**Pros:** Adds behavior at runtime without touching original class (OCP-friendly); more flexible than static inheritance-based extension; decorators can be stacked/combined.
+**Cons:** Can result in many small classes and layered wrapping that's harder to debug (stack traces get deep); order of decorators can matter and be error-prone.
+
+**Decorator vs Inheritance:** Inheritance extends behavior statically at compile time for **all** instances of a subclass; Decorator extends behavior dynamically at runtime, per-instance, and can be composed in different combinations.
+
+---
+
+## Facade
+
+**Intent:** Provide a simplified, unified interface to a complex subsystem of classes, making the subsystem easier to use.
+
+**Code:**
+```java
+class CPU { void freeze() {} void jump(long pos) {} void execute() {} }
+class Memory { void load(long pos, byte[] data) {} }
+class HardDrive { byte[] read(long lba, int size) { return new byte[size]; } }
+
+// Facade
+class ComputerFacade {
+    private CPU cpu = new CPU();
+    private Memory memory = new Memory();
+    private HardDrive hd = new HardDrive();
+
+    void start() { // hides the complex multi-step boot sequence
+        cpu.freeze();
+        memory.load(0, hd.read(0, 1024));
+        cpu.jump(0);
+        cpu.execute();
+    }
+}
+
+new ComputerFacade().start(); // client doesn't need to know CPU/Memory/HardDrive details
+```
+
+**Real-world examples:** A `PaymentService` facade hiding calls to fraud-check, currency conversion, and gateway APIs; jQuery hiding raw DOM API complexity; ORM libraries hiding raw SQL.
+
+**Pros:** Reduces complexity for client code; decouples client from subsystem internals; subsystem can change internally without breaking clients (as long as the facade's interface stays stable).
+**Cons:** Can become a "god object" if it grows to expose too much; doesn't prevent clients from bypassing the facade and using the subsystem directly if it's still accessible.
+
+**Facade vs Adapter:** Adapter makes an existing interface *compatible* with what's expected (changes the interface shape). Facade *simplifies* a complex interface without necessarily changing its underlying purpose — it's about ease-of-use, not compatibility.
+
+---
+
+## Flyweight
+
+**Intent:** Minimize memory usage by **sharing** as much data as possible with other similar objects, separating **intrinsic** (shared, immutable) state from **extrinsic** (unique, context-dependent, passed in externally) state.
+
+**Code:**
+```java
+class TreeType { // intrinsic state — shared, immutable
+    String name, color, texture;
+    TreeType(String name, String color, String texture) {
+        this.name = name; this.color = color; this.texture = texture;
+    }
+    void draw(int x, int y) { // extrinsic state passed as parameters
+        System.out.println("Drawing " + name + " at (" + x + "," + y + ")");
+    }
+}
+class TreeFactory {
+    static Map<String, TreeType> types = new HashMap<>();
+    static TreeType getTreeType(String name, String color, String texture) {
+        String key = name + color + texture;
+        return types.computeIfAbsent(key, k -> new TreeType(name, color, texture));
+    }
+}
+class Tree { // extrinsic state
+    int x, y;
+    TreeType type; // shared reference — not duplicated per tree
+    Tree(int x, int y, TreeType type) { this.x = x; this.y = y; this.type = type; }
+    void draw() { type.draw(x, y); }
+}
+// Rendering a forest of 1,000,000 trees only creates a handful of TreeType objects
+```
+
+**Real-world examples:** Character glyphs in a text editor (font/style shared, position is extrinsic), game engines rendering thousands of similar entities (trees, bullets), Java's `Integer.valueOf()` caching small integers (-128 to 127).
+
+**Pros:** Dramatically reduces memory footprint when many similar objects are needed.
+**Cons:** Adds complexity (splitting state into intrinsic/extrinsic isn't always natural); introduces shared mutable state risk if intrinsic data isn't kept truly immutable; extrinsic state must be recomputed/passed each time, which can add CPU overhead.
+
+---
+
+## Proxy
+
+**Intent:** Provide a surrogate/placeholder object that controls access to another object, adding a layer of control (lazy loading, access control, logging, caching) without the client knowing.
+
+**Code (Virtual Proxy — lazy loading):**
+```java
+interface Image { void display(); }
+
+class RealImage implements Image {
+    private String filename;
+    RealImage(String filename) {
+        this.filename = filename;
+        loadFromDisk(); // expensive
+    }
+    private void loadFromDisk() { System.out.println("Loading " + filename); }
+    public void display() { System.out.println("Displaying " + filename); }
+}
+
+class ProxyImage implements Image {
+    private RealImage realImage;
+    private String filename;
+    ProxyImage(String filename) { this.filename = filename; }
+    public void display() {
+        if (realImage == null) { // load only when actually needed
+            realImage = new RealImage(filename);
+        }
+        realImage.display();
+    }
+}
+```
+
+**Types of proxies (worth naming in interviews):**
+- **Virtual Proxy:** Delays expensive object creation until needed (as above).
+- **Protection Proxy:** Controls access based on permissions (e.g., checks if the caller is authorized).
+- **Remote Proxy:** Represents an object in a different address space (e.g., gRPC/RPC stubs).
+- **Caching Proxy:** Caches results of expensive operations.
+- **Logging/Smart Proxy:** Adds logging, reference counting, etc., around access.
+
+**Real-world examples:** Hibernate lazy-loaded entities, Spring AOP proxies, gRPC client stubs, CDNs as caching proxies.
+
+**Pros:** Adds control without changing the real object's code or the client's expectations (same interface); enables lazy initialization, access control, caching transparently.
+**Cons:** Adds indirection/latency; can make debugging harder since behavior isn't in the object the client thinks it's calling.
+
+**Proxy vs Decorator (frequently confused):** Both wrap an object behind the same interface. **Decorator** adds/enhances **behavior/responsibility** (and is meant to be stacked freely). **Proxy** controls **access** to the object (often just one layer, focused on when/how the real object is reached, not new features).
+
+---
+
+# Behavioral Patterns
+*Concerned with algorithms and the assignment of responsibilities/communication between objects.*
+
+## Observer
+
+**Intent:** Define a one-to-many dependency between objects so that when one object (the **Subject**) changes state, all its dependents (**Observers**) are notified and updated automatically.
+
+**Code:**
+```java
+interface Observer { void update(float temperature); }
+
+class WeatherStation {
+    private List<Observer> observers = new ArrayList<>();
+    private float temperature;
+
+    void subscribe(Observer o) { observers.add(o); }
+    void unsubscribe(Observer o) { observers.remove(o); }
+
+    void setTemperature(float temp) {
+        this.temperature = temp;
+        notifyObservers();
+    }
+    private void notifyObservers() {
+        for (Observer o : observers) o.update(temperature);
+    }
+}
+
+class PhoneDisplay implements Observer {
+    public void update(float temperature) {
+        System.out.println("Phone: Temp is " + temperature);
+    }
+}
+
+WeatherStation station = new WeatherStation();
+station.subscribe(new PhoneDisplay());
+station.setTemperature(25.5f); // all subscribers auto-notified
+```
+
+**Real-world examples:** Event listeners in GUIs/JavaScript (`addEventListener`), pub/sub messaging systems (Kafka, RabbitMQ at a conceptual level), reactive libraries (RxJava), MVC (View observes Model).
+
+**Pros:** Loose coupling between subject and observers (subject doesn't need to know concrete observer types, just the interface); supports dynamic subscribe/unsubscribe at runtime.
+**Cons:** Can cause unexpected cascading updates ("update storms") if not managed; memory leaks if observers aren't unsubscribed (classic "lapsed listener" problem); notification order isn't guaranteed unless explicitly designed.
+
+---
+
+## Strategy
+
+**Intent:** Define a family of interchangeable algorithms, encapsulate each one, and make them interchangeable at runtime — the client can swap the algorithm without changing the code that uses it.
+
+**Code:**
+```java
+interface PaymentStrategy { void pay(double amount); }
+class CreditCardStrategy implements PaymentStrategy {
+    public void pay(double amount) { System.out.println("Paid $" + amount + " via Credit Card"); }
+}
+class PayPalStrategy implements PaymentStrategy {
+    public void pay(double amount) { System.out.println("Paid $" + amount + " via PayPal"); }
+}
+
+class ShoppingCart {
+    private PaymentStrategy strategy;
+    void setPaymentStrategy(PaymentStrategy s) { this.strategy = s; } // swap at runtime
+    void checkout(double amount) { strategy.pay(amount); }
+}
+
+ShoppingCart cart = new ShoppingCart();
+cart.setPaymentStrategy(new PayPalStrategy());
+cart.checkout(49.99);
+```
+
+**Real-world examples:** Sorting algorithms selectable via `Comparator`, compression algorithm selection (zip/gzip/lz4), route-calculation strategies in navigation apps (fastest/shortest/avoid tolls), validation rule strategies.
+
+**Pros:** Eliminates large conditional (`if/else` or `switch`) blocks selecting behavior; each algorithm is independently testable; adheres to OCP (add new strategies without modifying existing code).
+**Cons:** Client must be aware of different strategies to choose the right one; increases number of classes/objects.
+
+**Strategy vs State (frequently confused):** Structurally nearly identical (both use composition + an interface for interchangeable behavior). The difference is **intent**: Strategy is chosen explicitly by the client and typically doesn't change on its own (e.g., "I choose to sort with quicksort"). State represents an object's internal condition that **transitions automatically** based on triggers/events, often orchestrated by the states themselves (e.g., an order moves from `Pending` → `Shipped` → `Delivered`).
+
+---
+
+## State
+
+**Intent:** Allow an object to alter its behavior when its internal state changes — the object appears to change its class. Avoids large conditional blocks tied to state checks.
+
+**Code:**
+```java
+interface OrderState {
+    void next(OrderContext ctx);
+    String name();
+}
+class PendingState implements OrderState {
+    public void next(OrderContext ctx) { ctx.setState(new ShippedState()); }
+    public String name() { return "Pending"; }
+}
+class ShippedState implements OrderState {
+    public void next(OrderContext ctx) { ctx.setState(new DeliveredState()); }
+    public String name() { return "Shipped"; }
+}
+class DeliveredState implements OrderState {
+    public void next(OrderContext ctx) { System.out.println("Already delivered."); }
+    public String name() { return "Delivered"; }
+}
+
+class OrderContext {
+    private OrderState state = new PendingState();
+    void setState(OrderState s) { this.state = s; }
+    void advance() { state.next(this); }
+    String currentState() { return state.name(); }
+}
+```
+
+**Real-world examples:** ATM states (idle/has-card/transaction), TCP connection states, elevator states (idle/moving/door-open), traffic light, media player (playing/paused/stopped).
+
+**Pros:** Removes complex conditional logic scattered across methods; each state's behavior is isolated and easy to extend (add a new state = add a new class, OCP-friendly); makes illegal state transitions harder to represent accidentally.
+**Cons:** Can lead to many small state classes; the state transition logic can become spread across state classes, making the overall flow harder to see at a glance (vs. one centralized state machine table).
+
+---
+
+## Command
+
+**Intent:** Encapsulate a request as an object, allowing you to parameterize clients with different requests, queue or log requests, and support undoable operations.
+
+**Code:**
+```java
+interface Command { void execute(); void undo(); }
+
+class Light {
+    void on() { System.out.println("Light ON"); }
+    void off() { System.out.println("Light OFF"); }
+}
+class LightOnCommand implements Command {
+    private Light light;
+    LightOnCommand(Light light) { this.light = light; }
+    public void execute() { light.on(); }
+    public void undo() { light.off(); }
+}
+
+class RemoteControl {
+    private Command command;
+    private Stack<Command> history = new Stack<>();
+    void setCommand(Command c) { this.command = c; }
+    void pressButton() { command.execute(); history.push(command); }
+    void pressUndo() { if (!history.isEmpty()) history.pop().undo(); }
+}
+```
+
+**Real-world examples:** GUI button/menu actions, undo/redo stacks in editors, job queues/task schedulers, transaction logging, macro recording.
+
+**Pros:** Decouples the object that invokes an operation from the one that knows how to perform it; supports undo/redo, queuing, and logging naturally; new commands can be added without changing invoker code (OCP).
+**Cons:** Can result in a proliferation of small command classes for every action.
+
+---
+
+## Template Method
+
+**Intent:** Define the skeleton of an algorithm in a base class method, deferring some steps to subclasses — subclasses can override specific steps **without changing the algorithm's overall structure**.
+
+**Code:**
+```java
+abstract class DataProcessor {
+    // Template method — final so subclasses can't change the overall algorithm structure
+    final void process() {
+        readData();
+        processData();
+        writeData();
+    }
+    abstract void readData();
+    abstract void processData();
+    void writeData() { System.out.println("Writing to default output"); } // default/hook step
+}
+
+class CSVProcessor extends DataProcessor {
+    void readData() { System.out.println("Reading CSV"); }
+    void processData() { System.out.println("Processing CSV rows"); }
+}
+class JSONProcessor extends DataProcessor {
+    void readData() { System.out.println("Reading JSON"); }
+    void processData() { System.out.println("Processing JSON nodes"); }
+    @Override void writeData() { System.out.println("Writing formatted JSON output"); } // overrides hook
+}
+```
+
+**Real-world examples:** Framework lifecycle methods (e.g., Android Activity `onCreate`/`onStart`/`onResume`), `java.io.InputStream` subclasses, unit test frameworks (`setUp()` → `test()` → `tearDown()`), sorting algorithms with a customizable comparison step.
+
+**Pros:** Promotes code reuse for the invariant parts of an algorithm; enforces a consistent overall process while allowing customization of specific steps (Hollywood Principle: "don't call us, we'll call you").
+**Cons:** Relies on inheritance (less flexible than composition-based Strategy); can be harder to understand since the algorithm's flow is split across base and derived classes.
+
+**Template Method vs Strategy:** Template Method uses **inheritance** to let subclasses override specific steps of a fixed algorithm. Strategy uses **composition** to swap an entire algorithm/behavior interchangeably. Template Method varies *parts* of an algorithm; Strategy varies the *whole* algorithm.
+
+---
+
+## Chain of Responsibility
+
+**Intent:** Pass a request along a chain of handlers; each handler decides either to process the request or pass it to the next handler in the chain, decoupling sender from receiver.
+
+**Code:**
+```java
+abstract class SupportHandler {
+    protected SupportHandler next;
+    void setNext(SupportHandler next) { this.next = next; }
+    abstract void handle(int severity);
+}
+class Level1Support extends SupportHandler {
+    void handle(int severity) {
+        if (severity <= 1) System.out.println("Level1 handled it");
+        else if (next != null) next.handle(severity);
+    }
+}
+class Level2Support extends SupportHandler {
+    void handle(int severity) {
+        if (severity <= 2) System.out.println("Level2 handled it");
+        else if (next != null) next.handle(severity);
+    }
+}
+class ManagerSupport extends SupportHandler {
+    void handle(int severity) { System.out.println("Manager handled it"); }
+}
+
+Level1Support l1 = new Level1Support();
+Level2Support l2 = new Level2Support();
+ManagerSupport mgr = new ManagerSupport();
+l1.setNext(l2);
+l2.setNext(mgr);
+l1.handle(3); // passes through l1 -> l2 -> manager
+```
+
+**Real-world examples:** Middleware pipelines (Express.js, servlet filters), exception handling hierarchies, logging frameworks with severity-level handlers, approval workflows (manager → director → VP).
+
+**Pros:** Decouples sender from specific receiver; chain can be reconfigured dynamically; each handler has single, focused responsibility (SRP-friendly).
+**Cons:** A request might go unhandled if no handler in the chain processes it (need a sensible default/fallback); can make debugging harder since it's not obvious which handler will process a request without tracing the chain.
+
+---
+
+## Mediator
+
+**Intent:** Define an object that encapsulates how a set of objects interact, promoting loose coupling by preventing objects from referring to each other directly — they only communicate through the mediator.
+
+**Code:**
+```java
+interface ChatMediator {
+    void sendMessage(String msg, User sender);
+    void addUser(User user);
+}
+class ChatRoom implements ChatMediator {
+    private List<User> users = new ArrayList<>();
+    public void addUser(User u) { users.add(u); }
+    public void sendMessage(String msg, User sender) {
+        for (User u : users) {
+            if (u != sender) u.receive(msg); // sender doesn't talk directly to other users
+        }
+    }
+}
+class User {
+    private String name;
+    private ChatMediator mediator;
+    User(String name, ChatMediator mediator) { this.name = name; this.mediator = mediator; }
+    void send(String msg) { mediator.sendMessage(name + ": " + msg, this); }
+    void receive(String msg) { System.out.println(name + " received: " + msg); }
+}
+```
+
+**Real-world examples:** Air traffic control (planes don't talk to each other directly, all go through the tower), chat room servers, UI dialog boxes where widgets communicate through a controller instead of directly referencing each other.
+
+**Pros:** Reduces direct dependencies between communicating objects (many-to-many becomes many-to-one); centralizes complex communication/control logic in one place.
+**Cons:** The mediator itself can become a "god object" that's complex and hard to maintain if it accumulates too much logic.
+
+**Mediator vs Observer:** Observer is about **one-to-many notification** (a subject broadcasting state changes to subscribers). Mediator is about **coordinating many-to-many interactions** between peer objects that would otherwise need direct references to each other.
+
+---
+
+## Iterator
+
+**Intent:** Provide a way to access elements of an aggregate/collection object sequentially without exposing its underlying representation.
+
+**Code:**
+```java
+interface MyIterator<T> {
+    boolean hasNext();
+    T next();
+}
+class NameCollection implements Iterable<String> {
+    private String[] names;
+    NameCollection(String[] names) { this.names = names; }
+    public Iterator<String> iterator() {
+        return new Iterator<String>() {
+            private int index = 0;
+            public boolean hasNext() { return index < names.length; }
+            public String next() { return names[index++]; }
+        };
+    }
+}
+
+NameCollection collection = new NameCollection(new String[]{"Alice", "Bob"});
+for (String name : collection) { // works because it implements Iterable
+    System.out.println(name);
+}
+```
+
+**Real-world examples:** Java's `Iterator`/`Iterable` interfaces (used under the hood by every for-each loop), database cursors, tree/graph traversal utilities.
+
+**Pros:** Decouples traversal logic from the collection's internal structure; supports multiple simultaneous independent traversals of the same collection; uniform traversal interface across different collection types.
+**Cons:** Overkill for simple, fixed-size collections that don't need abstraction over traversal; can be less efficient than direct indexed access for certain structures.
+
+---
+
+## Visitor
+
+**Intent:** Represent an operation to be performed on elements of an object structure, letting you define a new operation **without changing the classes of the elements** on which it operates. Achieved via "double dispatch."
+
+**Code:**
+```java
+interface Visitor {
+    void visit(Circle c);
+    void visit(Square s);
+}
+interface Shape { void accept(Visitor v); }
+
+class Circle implements Shape {
+    double radius;
+    Circle(double r) { radius = r; }
+    public void accept(Visitor v) { v.visit(this); } // double dispatch
+}
+class Square implements Shape {
+    double side;
+    Square(double s) { side = s; }
+    public void accept(Visitor v) { v.visit(this); }
+}
+
+class AreaVisitor implements Visitor {
+    public void visit(Circle c) { System.out.println("Circle area: " + (Math.PI * c.radius * c.radius)); }
+    public void visit(Square s) { System.out.println("Square area: " + (s.side * s.side)); }
+}
+class PerimeterVisitor implements Visitor {
+    public void visit(Circle c) { System.out.println("Circle perimeter: " + (2 * Math.PI * c.radius)); }
+    public void visit(Square s) { System.out.println("Square perimeter: " + (4 * s.side)); }
+}
+
+List<Shape> shapes = List.of(new Circle(2), new Square(3));
+Visitor areaVisitor = new AreaVisitor();
+for (Shape s : shapes) s.accept(areaVisitor); // add new operations without touching Shape classes
+```
+
+**Real-world examples:** Compilers/ASTs (operations like type-checking, code generation, pretty-printing performed as visitors over the syntax tree), document object model processing (e.g., exporting a document to different formats).
+
+**Pros:** Adds new operations over an object structure without modifying the element classes (great OCP compliance for *operations*); groups related behavior for an operation in one visitor class instead of scattering it across element classes.
+**Cons:** Adding a **new element type** requires updating every visitor (inverse trade-off of OCP — easy to add operations, hard to add types); breaks encapsulation somewhat since visitors often need access to element internals.
+
+---
+
+## Memento
+
+**Intent:** Capture and externalize an object's internal state (without violating encapsulation) so it can be restored to that state later — the classic mechanism behind undo functionality.
+
+**Code:**
+```java
+class EditorMemento { // stores state
+    private final String content;
+    EditorMemento(String content) { this.content = content; }
+    String getContent() { return content; }
+}
+class Editor { // originator
+    private String content = "";
+    void write(String text) { content += text; }
+    EditorMemento save() { return new EditorMemento(content); }
+    void restore(EditorMemento m) { content = m.getContent(); }
+    String getContent() { return content; }
+}
+class History { // caretaker
+    private Deque<EditorMemento> history = new ArrayDeque<>();
+    void push(EditorMemento m) { history.push(m); }
+    EditorMemento pop() { return history.pop(); }
+}
+
+Editor editor = new Editor();
+History history = new History();
+editor.write("Hello ");
+history.push(editor.save());
+editor.write("World");
+editor.restore(history.pop()); // reverts to "Hello "
+```
+
+**Real-world examples:** Undo/redo in text editors and IDEs, game save states/checkpoints, transaction rollback in databases (conceptually).
+
+**Pros:** Preserves encapsulation (the memento's internal state isn't exposed to the caretaker, only to the originator that created it); simplifies the originator by moving state-saving responsibility out.
+**Cons:** Can be memory-intensive if snapshots are large or frequent (many mementos stored in history); caretaker must manage memento lifecycle carefully to avoid leaks.
+
+**Memento vs Command (both used for undo):** Command stores the **operation** to reverse (and an inverse operation, e.g., `undo()` calls `light.off()`). Memento stores a **snapshot of state** to restore directly. Complex undo systems often combine both — Command to know *what* changed, Memento to know *the state* to roll back to.
+
+---
+
+# Pattern Selection Cheat Sheet
+
+| If you need to... | Use |
+|---|---|
+| Ensure only one instance exists globally | **Singleton** |
+| Let subclasses decide which class to instantiate | **Factory Method** |
+| Create families of related objects consistently | **Abstract Factory** |
+| Construct a complex object step-by-step, avoid telescoping constructors | **Builder** |
+| Create new objects by copying an expensive-to-construct prototype | **Prototype** |
+| Make incompatible interfaces work together | **Adapter** |
+| Decouple abstraction from implementation so both vary independently | **Bridge** |
+| Treat individual objects and groups of objects uniformly (tree structures) | **Composite** |
+| Add responsibilities to objects dynamically, without subclassing | **Decorator** |
+| Provide a simple interface to a complex subsystem | **Facade** |
+| Reduce memory for large numbers of similar objects | **Flyweight** |
+| Control access to an object (lazy load, permissions, caching, remote) | **Proxy** |
+| Notify many dependents automatically when one object changes | **Observer** |
+| Swap interchangeable algorithms at runtime | **Strategy** |
+| Change behavior automatically as internal state changes | **State** |
+| Encapsulate a request as an object (undo/redo, queuing, logging) | **Command** |
+| Define a fixed algorithm skeleton, let subclasses customize steps | **Template Method** |
+| Pass a request along a chain until someone handles it | **Chain of Responsibility** |
+| Coordinate many-to-many communication between objects | **Mediator** |
+| Traverse a collection without exposing its internals | **Iterator** |
+| Add new operations to a class hierarchy without modifying it | **Visitor** |
+| Save/restore an object's state (undo) without breaking encapsulation | **Memento** |
+
+---
+
+# Rapid-Fire Interview Q&A
+
+**Q: What's the difference between Factory Method and Abstract Factory?**
+Factory Method uses inheritance to create **one** product type via a single overridden method. Abstract Factory uses composition/an injected factory object to create **families** of related products consistently.
+
+**Q: When would you choose Strategy over simple if/else branching?**
+When the number of algorithm variants is likely to grow, when each variant deserves independent testing, or when you want to let the caller inject custom behavior (OCP) instead of modifying a central conditional block.
+
+**Q: How is Decorator different from just subclassing to add behavior?**
+Subclassing adds behavior statically at compile time to all instances of that subclass. Decorator wraps individual object *instances* at runtime and can be stacked/combined dynamically and selectively.
+
+**Q: Why is Singleton often considered an anti-pattern?**
+It introduces global mutable state, hides dependencies (classes call a static method instead of receiving a dependency explicitly), and makes unit testing harder since you can't easily substitute a different instance/mock.
+
+**Q: Give an example where you'd combine multiple patterns.**
+A UI toolkit might use **Abstract Factory** to create platform-specific widgets, **Composite** to organize them into a tree, **Observer** for event handling, and **Decorator** to add borders/scrollbars dynamically. The ATM LLD problem (previous section) combines **State** (machine states) with **Chain of Responsibility** (cash dispensing by denomination).
+
+**Q: What's the difference between Proxy and Decorator if both wrap an object with the same interface?**
+Proxy controls **access** to the real object (may not even create it until needed); Decorator **adds new functionality/responsibilities** and is meant to be layered arbitrarily. Intent differs even though structure looks similar.
+
+**Q: What's "double dispatch" and where does it show up?**
+A technique where the method executed depends on the runtime types of **two** objects (the visitor and the element), not just one. Used in the Visitor pattern — `element.accept(visitor)` calls back into `visitor.visit(element)`, resolving both types before the correct method runs.
+
+**Q: Which patterns rely on composition vs inheritance as their core mechanism?**
+Composition-based: Strategy, State, Decorator, Bridge, Composite, Observer, Proxy, Mediator.
+Inheritance-based: Template Method, Factory Method (uses subclassing to vary the created product).
+This ties directly back to the "favor composition over inheritance" principle from the OOP section — most modern, flexible patterns lean on composition.
+
+---
+
+## Suggested Study Approach
+1. For each pattern, be able to draw its structure from memory and explain intent in one sentence.
+2. Practice implementing Singleton, Factory Method, Strategy, Observer, Decorator, and State from scratch — these are the most frequently asked in interviews.
+3. Revisit the 4 LLD practice problems from the OOP guide and explicitly map which patterns you'd apply and why.
+4. Drill the "frequently confused" pairs: Factory Method vs Abstract Factory, Strategy vs State, Adapter vs Facade vs Bridge, Proxy vs Decorator, Observer vs Mediator, Command vs Memento.

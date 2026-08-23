@@ -1,0 +1,396 @@
+---
+title: "Networking"
+description: "Covers the OSI/TCP-IP models, core protocols, and the infrastructure concepts (load balancing, CDNs, proxies) that show up constantly in both networking-fundamentals and system-..."
+---
+Covers the OSI/TCP-IP models, core protocols, and the infrastructure concepts (load balancing, CDNs, proxies) that show up constantly in both networking-fundamentals and system-design interviews.
+
+---
+
+## Table of Contents
+1. [OSI Model](#1-osi-model)
+2. [TCP/IP](#2-tcpip)
+3. [TCP Handshake](#3-tcp-handshake)
+4. [UDP](#4-udp)
+5. [DNS](#5-dns)
+6. [DHCP](#6-dhcp)
+7. [NAT](#7-nat)
+8. [CDN](#8-cdn)
+9. [Load Balancing](#9-load-balancing)
+10. [Reverse Proxy](#10-reverse-proxy)
+11. [Firewalls](#11-firewalls)
+12. [VPN](#12-vpn)
+13. [HTTP/2](#13-http2)
+14. [HTTP/3](#14-http3)
+15. [QUIC](#15-quic)
+16. [WebSockets](#16-websockets)
+17. [gRPC Basics](#17-grpc-basics)
+18. [Rapid-Fire Interview Q&A](#18-rapid-fire-interview-qa)
+
+---
+
+## 1. OSI Model
+
+A conceptual 7-layer framework describing how network communication happens, from physical signal transmission up to the application. Mostly a teaching/reference model — real-world networking follows TCP/IP (Section 2), but interviewers still expect you to know the 7 layers cold.
+
+| Layer | Name | Responsibility | Examples |
+|---|---|---|---|
+| 7 | **Application** | User-facing protocols, data the app cares about | HTTP, FTP, SMTP, DNS |
+| 6 | **Presentation** | Data formatting, encryption, compression | SSL/TLS, JPEG, encoding |
+| 5 | **Session** | Establishing, managing, terminating sessions/connections | Session tokens, sockets |
+| 4 | **Transport** | End-to-end delivery, reliability, flow control | TCP, UDP |
+| 3 | **Network** | Routing, logical addressing | IP, ICMP, routers |
+| 2 | **Data Link** | Node-to-node delivery on the same network, MAC addressing, error detection | Ethernet, Wi-Fi, switches |
+| 1 | **Physical** | Raw bit transmission over physical medium | Cables, radio waves, hubs |
+
+**Mnemonic (commonly used):** "**A**ll **P**eople **S**eem **T**o **N**eed **D**ata **P**rocessing" (top to bottom: Application, Presentation, Session, Transport, Network, Data Link, Physical).
+
+**Interview trap:** *"Where does HTTP live?"* Layer 7 (Application). *"Where does TCP live?"* Layer 4 (Transport). *"Where does a switch operate?"* Layer 2 (uses MAC addresses). *"Where does a router operate?"* Layer 3 (uses IP addresses). Being able to place common technologies at the correct layer instantly is a frequent screening question.
+
+---
+
+## 2. TCP/IP
+
+The practical 4-layer model that the real internet actually runs on — simpler and more implementation-focused than OSI.
+
+| TCP/IP Layer | Roughly maps to OSI | Examples |
+|---|---|---|
+| **Application** | Layers 5-7 (Session, Presentation, Application) | HTTP, DNS, SMTP |
+| **Transport** | Layer 4 | TCP, UDP |
+| **Internet** | Layer 3 | IP, ICMP |
+| **Network Access (Link)** | Layers 1-2 | Ethernet, Wi-Fi |
+
+**TCP (Transmission Control Protocol):** Connection-oriented, reliable, ordered delivery — used when correctness/completeness matters more than speed (web pages, file transfer, email).
+
+**IP (Internet Protocol):** Handles addressing and routing of packets across networks — connectionless, best-effort delivery (no guarantee of arrival, order, or duplication prevention on its own — that's TCP's job layered on top).
+
+**IPv4 vs IPv6 (commonly asked):**
+- IPv4: 32-bit addresses (~4.3 billion addresses), dotted-decimal notation (`192.168.1.1`) — address exhaustion is why IPv6 exists.
+- IPv6: 128-bit addresses (effectively unlimited for practical purposes), hexadecimal colon notation (`2001:0db8::1`), built-in improvements (simplified header, no need for NAT in theory, better multicast support).
+
+---
+
+## 3. TCP Handshake
+
+TCP establishes a reliable connection via a **3-way handshake** before any data is sent (extremely commonly asked to explain step by step, and to draw).
+
+```
+Client                          Server
+  |------- SYN (seq=x) --------->|     1. Client requests connection, sends initial sequence number
+  |<---- SYN-ACK (seq=y,ack=x+1)-|     2. Server acknowledges, sends its own sequence number
+  |------- ACK (ack=y+1) ------->|     3. Client acknowledges — connection established
+  |                               |
+  |======= Data Transfer ========|
+```
+1. **SYN**: Client sends a `SYN` (synchronize) packet with an initial sequence number to request a connection.
+2. **SYN-ACK**: Server responds with its own `SYN` plus an `ACK` acknowledging the client's sequence number.
+3. **ACK**: Client acknowledges the server's sequence number — connection is now established, data transfer can begin.
+
+**Why 3 steps, not 2?** Both sides need to confirm they can both **send and receive** — a 2-way handshake would only confirm one direction. The 3rd step confirms the client received the server's SYN-ACK, completing mutual confirmation.
+
+**Connection termination — 4-way handshake (also commonly asked):**
+```
+Client -- FIN --> Server        Client wants to close
+Client <- ACK --- Server        Server acknowledges
+Client <- FIN --- Server        Server also ready to close (after finishing its own sends)
+Client -- ACK --> Server        Client acknowledges — connection fully closed
+```
+Requires 4 steps (not 3) because TCP is full-duplex — each side must independently close its own direction of the connection (server might still have data to finish sending after receiving the client's FIN).
+
+**TCP reliability mechanisms (worth mentioning if probed further):**
+- **Sequence numbers**: track byte order, detect missing/out-of-order/duplicate segments.
+- **Acknowledgments (ACKs)**: receiver confirms received data; unacknowledged data is retransmitted after a timeout.
+- **Flow control**: receiver advertises a "window size" telling the sender how much data it can accept without overwhelming its buffer.
+- **Congestion control**: sender adjusts transmission rate based on network conditions (e.g., algorithms like TCP Reno/Cubic use packet loss/delay as signals to slow down, avoiding network congestion collapse).
+
+---
+
+## 4. UDP
+
+**UDP (User Datagram Protocol)**: Connectionless, no handshake, no guarantee of delivery/order/deduplication — just "fire and forget" packets (datagrams). Much lower overhead than TCP.
+
+**TCP vs UDP (one of the most classic networking interview questions):**
+| | TCP | UDP |
+|---|---|---|
+| Connection | Connection-oriented (handshake required) | Connectionless |
+| Reliability | Guaranteed delivery, retransmits lost packets | No guarantee — packets can be lost, no retransmission |
+| Ordering | Guaranteed in-order delivery | No ordering guarantee |
+| Speed/Overhead | Slower (handshake, ACKs, flow/congestion control) | Faster, minimal overhead |
+| Use cases | Web browsing (HTTP historically), file transfer, email — anywhere correctness matters | Video/voice calls, live streaming, DNS, online gaming — anywhere speed/low-latency matters more than occasional lost packets |
+
+**Why would gaming/video calls prefer UDP even though it can lose data?** For real-time media, a dropped/late packet (e.g., one video frame) is often better simply skipped than retransmitted — by the time a retransmission would arrive, that moment has already passed. TCP's reliability guarantees would actually introduce *more* perceived lag ("head-of-line blocking" — see Section 13) than just tolerating minor data loss.
+
+---
+
+## 5. DNS
+
+**DNS (Domain Name System)**: Translates human-readable domain names (`example.com`) into IP addresses (`93.184.216.34`) that machines use for routing — often called "the phonebook of the internet."
+
+**DNS resolution process (commonly asked to walk through step by step):**
+```
+1. Browser checks its own cache → OS cache → router cache (skip ahead if found)
+2. Query sent to a Recursive Resolver (typically your ISP's or a public one like 8.8.8.8/1.1.1.1)
+3. Resolver queries a Root Nameserver → returns address of the correct TLD nameserver (e.g., ".com")
+4. Resolver queries the TLD Nameserver → returns address of the Authoritative Nameserver for "example.com"
+5. Resolver queries the Authoritative Nameserver → returns the actual IP address for example.com
+6. Resolver caches and returns the IP to the browser, which connects to that IP
+```
+
+**Common DNS record types (frequently asked to name/explain):**
+- **A record**: maps a domain to an IPv4 address.
+- **AAAA record**: maps a domain to an IPv6 address.
+- **CNAME**: aliases one domain name to another (e.g., `www.example.com` → `example.com`).
+- **MX record**: specifies mail servers for the domain (email routing).
+- **TXT record**: arbitrary text, often used for domain verification, SPF/DKIM (email security).
+- **NS record**: specifies the authoritative nameservers for the domain.
+
+**DNS caching & TTL:** Each DNS record has a **TTL (Time To Live)** dictating how long resolvers/browsers may cache it before re-querying — a trade-off between reducing DNS lookup latency/load (long TTL) and being able to quickly propagate changes like IP updates during failover (short TTL).
+
+**Why DNS uses UDP (mostly):** DNS queries are typically small and need to be fast — UDP's low overhead (no handshake) suits this well; DNS falls back to TCP for larger responses (e.g., zone transfers, or responses exceeding UDP's packet size limits, or when DNSSEC is used).
+
+---
+
+## 6. DHCP
+
+**DHCP (Dynamic Host Configuration Protocol)**: Automatically assigns IP addresses (and other network config — subnet mask, default gateway, DNS servers) to devices joining a network, avoiding manual configuration.
+
+**DORA process (commonly asked to name/explain):**
+```
+1. Discover: client broadcasts "I need an IP address" (no IP yet, so it broadcasts)
+2. Offer:    DHCP server responds with an offered IP address
+3. Request:  client broadcasts a request confirming it wants that offered IP (in case multiple servers offered)
+4. Ack:      server acknowledges, finalizing the lease
+```
+Assigned IPs are **leased** for a limited time (not permanent) — the client must periodically renew before the lease expires, or the address can be reassigned to another device.
+
+**Interview trap:** *"Why does the client broadcast instead of unicast in the Discover step?"* Because the client doesn't have an IP address yet (and doesn't know the DHCP server's address) — broadcasting to the local network segment is the only way to reach any listening DHCP server.
+
+---
+
+## 7. NAT
+
+**NAT (Network Address Translation)**: Allows multiple devices on a private network (using private IP ranges like `192.168.x.x`, `10.x.x.x`) to share a single public IP address when communicating with the internet, by rewriting packet headers at the router/gateway.
+
+```
+Private network:  192.168.1.10, 192.168.1.11, 192.168.1.12  (all behind one router)
+Router's public IP: 203.0.113.5
+
+Device 192.168.1.10 sends a request → Router rewrites source to 203.0.113.5:PORT_A
+Device 192.168.1.11 sends a request → Router rewrites source to 203.0.113.5:PORT_B
+Router tracks which port maps to which internal device, to route responses back correctly
+```
+
+**Why NAT matters (commonly asked):**
+- **IPv4 address conservation**: massively reduces the number of public IPv4 addresses needed (a major reason IPv4 exhaustion hasn't been a bigger crisis, alongside IPv6 adoption).
+- **Implicit security**: devices behind NAT aren't directly addressable/reachable from the public internet unless explicitly port-forwarded, providing a basic layer of protection (not a substitute for a real firewall, but a side benefit).
+
+**Types worth knowing by name:** Static NAT (fixed 1:1 mapping), Dynamic NAT (pool of public IPs assigned dynamically), **PAT (Port Address Translation)** / NAT overload (many private IPs share **one** public IP, differentiated by port — this is what most home routers actually use, as shown above).
+
+---
+
+## 8. CDN
+
+**CDN (Content Delivery Network)**: A geographically distributed network of proxy/cache servers ("edge servers" / "points of presence") that serve content (static assets — images, CSS, JS, video, and increasingly cached API responses) from a location physically closer to the end user, reducing latency.
+
+```
+User in Tokyo requests example.com/logo.png
+  → Routed to nearest CDN edge server (e.g., in Tokyo), NOT the origin server (e.g., in Virginia)
+  → If cached at that edge: served immediately (fast)
+  → If not cached: edge fetches from origin, caches it, then serves — subsequent requests are fast
+```
+
+**Benefits (commonly asked to list):**
+- **Reduced latency**: content served from a nearby edge node instead of a potentially distant origin server.
+- **Reduced origin load**: most requests served from cache, never reaching the origin server.
+- **DDoS mitigation**: distributes/absorbs traffic spikes across many edge nodes; many CDN providers offer built-in DDoS protection.
+- **High availability**: if one edge node fails, traffic can be routed to another.
+
+**How a user gets routed to the nearest edge:** Typically via **DNS-based routing** (the CDN's DNS returns different IPs depending on the requester's geographic location/network) or **Anycast** (the same IP address is announced from multiple physical locations; standard internet routing (BGP) naturally sends the request to the "nearest" — in network-topology terms — announcing location).
+
+**Cache invalidation with CDNs:** A real operational concern — when origin content changes, the CDN's cached copies must be purged/invalidated (or rely on short TTLs) to avoid serving stale content; ties back to the "cache invalidation is hard" theme from the Databases guide's caching section.
+
+---
+
+## 9. Load Balancing
+
+Distributing incoming traffic across multiple backend servers to improve availability, reliability, and scalability — a near-universal component in system-design interviews.
+
+**Layer 4 vs Layer 7 load balancing (very commonly asked distinction):**
+- **Layer 4 (Transport layer)**: Routes based on IP address and port only, without inspecting the actual content of the request (e.g., just forwards TCP/UDP packets). Faster (less processing), but "dumber" — can't make routing decisions based on request content (URL path, headers, cookies).
+- **Layer 7 (Application layer)**: Inspects the actual HTTP request (URL, headers, cookies, body) to make smarter routing decisions (e.g., route `/api/*` to one server pool, `/static/*` to another; route based on a session cookie for sticky sessions). More overhead, but more flexible.
+
+**Load balancing algorithms (commonly asked to compare):**
+- **Round Robin**: requests distributed sequentially across servers in rotation. Simple, but doesn't account for server load/capacity differences.
+- **Weighted Round Robin**: like round robin, but servers with more capacity get proportionally more requests.
+- **Least Connections**: routes to the server currently handling the fewest active connections — better for workloads with varying request durations.
+- **IP Hash**: routes based on a hash of the client's IP, ensuring the same client consistently reaches the same server (a simple way to achieve session affinity/"sticky sessions" without needing shared session storage).
+- **Least Response Time**: routes to the server with the lowest current response time/latency (a more real-time-aware variant of least connections).
+
+**Health checks:** Load balancers periodically ping backend servers (e.g., a `/health` endpoint) and automatically stop routing traffic to unhealthy/unresponsive ones — critical for actual fault tolerance, not just distribution.
+
+**Interview trap:** *"Doesn't a load balancer become a single point of failure itself?"* Yes, if there's only one — production systems typically run load balancers in **active-passive** or **active-active** redundant pairs (often behind a DNS-level or Anycast-based failover mechanism, or using a floating/virtual IP that can move between LB instances), so the load balancer layer itself doesn't become the SPOF it appears to solve for.
+
+---
+
+## 10. Reverse Proxy
+
+A server that sits **in front of** backend servers, forwarding client requests to the appropriate backend and returning the backend's response to the client — the client only ever talks to the proxy, unaware of which backend actually served the request.
+
+```
+Client → Reverse Proxy (e.g., Nginx) → Backend Server 1, 2, or 3
+```
+
+**Forward Proxy vs Reverse Proxy (classic interview distinction):**
+| | Forward Proxy | Reverse Proxy |
+|---|---|---|
+| Sits in front of | The **client** (acting on the client's behalf) | The **server** (acting on the server's behalf) |
+| Client awareness | Client explicitly configures/knows about it | Client is unaware — thinks it's talking directly to the origin server |
+| Purpose | Anonymize/control client outbound traffic (e.g., bypass content restrictions, corporate content filtering, client-side caching) | Load balancing, SSL termination, caching, hiding backend architecture, security |
+
+**Common reverse proxy responsibilities (frequently listed in system-design answers):**
+- **Load balancing** (Section 9 — often the same piece of software, e.g., Nginx/HAProxy, serves both roles).
+- **SSL/TLS termination**: decrypts HTTPS traffic at the proxy, so backend servers handle only plain HTTP internally, simplifying certificate management (one place to manage certs) and offloading the CPU cost of encryption from app servers.
+- **Caching**: cache responses at the proxy layer to reduce backend load.
+- **Security/obfuscation**: hides backend server topology/IPs from the public internet, adds a layer for WAF (Web Application Firewall) rules, rate limiting.
+- **Compression**: gzip/brotli compress responses before sending to clients.
+
+---
+
+## 11. Firewalls
+
+A network security system that monitors and controls incoming/outgoing traffic based on predefined security rules, acting as a barrier between trusted internal networks and untrusted external networks (like the internet).
+
+**Types (commonly asked to distinguish):**
+- **Packet-filtering firewall**: Inspects individual packets (IP address, port, protocol) against a rule set — fast, but stateless (doesn't track connection context) and limited in sophistication.
+- **Stateful firewall**: Tracks the state of active connections (e.g., knows a packet is part of an already-established, legitimately-initiated TCP connection) and makes decisions based on that context, not just individual packets — more secure than pure packet filtering.
+- **Application-layer (Layer 7) firewall / WAF (Web Application Firewall)**: Inspects actual application data (e.g., HTTP request content) to catch attacks like SQL injection or XSS payloads that a lower-layer firewall wouldn't see — ties directly into the Security section topics (SQLi, XSS, OWASP Top 10).
+- **Next-Generation Firewall (NGFW)**: Combines traditional firewall capabilities with deep packet inspection, intrusion prevention, and application awareness.
+
+**Where firewalls are deployed:** Network perimeter (between internal network and internet), host-based (software firewall on an individual machine), and increasingly at the cloud/VPC level (e.g., AWS Security Groups act as stateful firewalls per-instance, Network ACLs act more like stateless packet filters per-subnet — a commonly asked AWS-specific distinction in cloud-adjacent interviews).
+
+---
+
+## 12. VPN
+
+**VPN (Virtual Private Network)**: Creates an encrypted "tunnel" over a public network (like the internet), allowing a device to securely access a private network as if directly connected to it, and/or masking the user's actual IP/location from the sites they visit.
+
+**How it works (simplified):** Traffic between the client and a VPN server is encrypted (commonly via protocols like OpenVPN, WireGuard, or IPsec); the VPN server then forwards the (now decrypted) traffic to its actual destination, and the destination sees the VPN server's IP, not the client's real IP.
+
+**Common use cases (worth naming):**
+- **Remote access to corporate networks**: employees securely reaching internal company resources from outside the office.
+- **Site-to-site VPN**: connecting two separate private networks (e.g., two office branches) securely over the internet.
+- **Privacy/anonymity**: masking a user's real IP and encrypting traffic from local network eavesdroppers (e.g., on public Wi-Fi).
+- **Bypassing geo-restrictions**: appearing to browse from a different region.
+
+**Interview trap:** A VPN encrypts traffic **between the client and the VPN server** — it does not make traffic magically anonymous/secure end-to-end beyond that point; the VPN provider itself can see (and in less-trustworthy cases, log) your unencrypted traffic if the destination itself isn't using HTTPS. Worth mentioning this nuance if discussing VPN security depth.
+
+---
+
+## 13. HTTP/2
+
+A major revision of HTTP designed to address HTTP/1.1's performance limitations, while keeping the same semantics (methods, status codes, headers) — it changes **how** data is transported, not the meaning of the requests/responses themselves.
+
+**Key improvements over HTTP/1.1 (commonly asked to list):**
+- **Multiplexing**: Multiple requests/responses can be sent concurrently over a **single TCP connection**, interleaved as small "frames" — solves HTTP/1.1's problem of needing multiple parallel TCP connections (browsers historically opened 6+ connections per domain) to avoid one slow request blocking others.
+- **Header compression (HPACK)**: Reduces overhead from repetitive headers sent with every request (e.g., cookies, user-agent) by compressing and maintaining a shared compression context between client/server.
+- **Server Push**: Server can proactively send resources it knows the client will need (e.g., pushing `style.css` alongside `index.html` without waiting for the client to request it) — though this feature saw limited real-world adoption and has since been deprecated/removed in many implementations (e.g., Chrome removed support) due to caching complications and marginal real-world benefit.
+- **Binary framing**: HTTP/2 uses a binary protocol (vs HTTP/1.1's plain text), which is more efficient to parse and less error-prone.
+- **Stream prioritization**: Clients can hint which requests are more important, letting the server allocate bandwidth accordingly.
+
+**HTTP/1.1's Head-of-Line (HOL) Blocking problem (the key issue HTTP/2 solves, frequently asked to explain):** In HTTP/1.1, requests on a single connection must be answered in order — if one response is slow, all subsequent responses on that connection are blocked behind it, even if they're ready. HTTP/2's multiplexing (interleaved frames from independent streams) eliminates this **at the HTTP layer**.
+
+---
+
+## 14. HTTP/3
+
+The latest major HTTP revision, which switches the underlying transport from **TCP to QUIC** (built on UDP) — see Section 15 for what QUIC is and why.
+
+**Why HTTP/3 exists despite HTTP/2's improvements:** HTTP/2 solved HOL blocking **at the application layer** (via multiplexing), but a subtler problem remained: **TCP-level HOL blocking**. Because HTTP/2 still runs over a single TCP connection, if even one TCP packet is lost, **TCP itself blocks delivery of all subsequently received packets/streams** until that lost packet is retransmitted and received — even though those later packets belong to logically independent HTTP/2 streams that have nothing to do with the lost one. HTTP/3, by using QUIC (built on UDP, with independent per-stream loss recovery), solves this: a lost packet only blocks the **specific stream** it belonged to, not all streams sharing the connection.
+
+**Other HTTP/3 benefits (worth naming):** Faster connection establishment (QUIC combines the transport and TLS handshakes into fewer round trips — see Section 15); built-in encryption (QUIC mandates TLS 1.3, unlike TCP+TLS which are separate, optional layers); better handling of network changes (e.g., switching from Wi-Fi to cellular mid-connection — QUIC uses connection IDs rather than IP+port tuples, so a connection can survive an IP change, unlike TCP).
+
+---
+
+## 15. QUIC
+
+**QUIC (Quick UDP Internet Connections)**: A transport protocol built on top of **UDP** (not TCP), designed by Google, that provides TCP-like reliability and ordering **plus** built-in encryption and multiplexed, independent streams — the foundation HTTP/3 is built on.
+
+**Why build on UDP instead of just fixing TCP?** TCP is implemented deep in operating system kernels and network middleboxes across the entire internet — changing its fundamental behavior (like fixing HOL blocking) would require updating essentially every OS and network device globally, an impossibly slow rollout. Building QUIC as a **user-space protocol over UDP** allowed rapid iteration and deployment (updates ship with the browser/application, not the OS) while still leveraging UDP's minimal, unopinionated transport as a foundation, layering QUIC's own reliability/ordering/congestion-control logic on top in software.
+
+**Key QUIC features (commonly asked):**
+- **Independent stream multiplexing**: multiple streams within one QUIC connection don't block each other on packet loss (solves TCP-level HOL blocking, as discussed in Section 14).
+- **Built-in TLS 1.3 encryption**: encryption isn't a bolted-on separate layer (as with TCP+TLS) — it's integrated into the protocol itself, and the transport + cryptographic handshakes are combined, reducing round trips needed to establish a secure connection (often just **1 round trip**, or even **0-RTT** for resumed connections, vs TCP+TLS's typical 2-3 round trips).
+- **Connection migration**: connections are identified by a Connection ID rather than the traditional IP+port 4-tuple, allowing a connection to survive network changes (e.g., Wi-Fi to cellular handoff) without needing to re-establish.
+
+---
+
+## 16. WebSockets
+
+*(Also covered in the APIs & HTTP guide — included here for networking-layer completeness.)*
+
+A protocol enabling a **persistent, full-duplex** connection over a single TCP connection, established via an HTTP `Upgrade` handshake (`101 Switching Protocols`), after which both client and server can send messages to each other at any time without the overhead of repeated HTTP request/response cycles.
+
+**Networking-layer framing (what's typically probed in a networking-focused interview, vs the API-design framing covered earlier):** WebSockets operate over a single, long-lived TCP connection — meaning they inherit TCP's ordering/reliability guarantees, but also its head-of-line blocking behavior (Section 14) and the operational cost of holding many concurrent open connections on the server (each consuming file descriptors/memory), which is a key scalability consideration distinct from typical stateless HTTP request handling.
+
+---
+
+## 17. gRPC Basics
+
+*(Also introduced in the APIs & HTTP guide's RPC section — expanded here with networking-layer detail.)*
+
+**gRPC** is a high-performance RPC framework built by Google, using **HTTP/2** as its transport (leveraging multiplexing, header compression) and **Protocol Buffers (protobuf)** as its interface definition language and binary serialization format.
+
+```protobuf
+service UserService {
+  rpc GetUser (UserRequest) returns (UserResponse);
+  rpc StreamOrders (OrderRequest) returns (stream Order); // server streaming
+}
+message UserRequest { int32 id = 1; }
+message UserResponse { string name = 1; string email = 2; }
+```
+
+**Four communication patterns (commonly asked to name, enabled by gRPC's use of HTTP/2 streams):**
+1. **Unary**: single request → single response (traditional RPC call).
+2. **Server streaming**: single request → stream of responses (e.g., subscribing to live updates).
+3. **Client streaming**: stream of requests → single response (e.g., uploading chunks, then getting a final confirmation).
+4. **Bidirectional streaming**: both sides stream independently and simultaneously (e.g., a chat-like exchange).
+
+**Why gRPC is fast (commonly asked):** Protobuf's binary serialization is smaller and faster to parse than JSON's text-based format; HTTP/2's multiplexing avoids the connection overhead of opening many separate connections; strongly-typed contracts (`.proto` files) eliminate a class of runtime serialization errors and enable efficient code generation across languages.
+
+**When gRPC is a good fit vs REST/GraphQL (ties back to the APIs guide's REST vs RPC comparison):** Best for internal, high-throughput microservice-to-microservice communication where both client and server are controlled by the same team/organization (strongly-typed contracts, performance matter more than human-readability); less ideal for public-facing APIs consumed by arbitrary third parties or browsers (limited native browser support without a proxy like grpc-web, less human-debuggable than JSON/REST).
+
+---
+
+## 18. Rapid-Fire Interview Q&A
+
+**Q: What layer does a switch operate at? What about a router?**
+Switch: Layer 2 (Data Link, uses MAC addresses to forward within a local network). Router: Layer 3 (Network, uses IP addresses to route between networks).
+
+**Q: Why does TCP use a 3-way handshake but a 4-way termination?**
+The handshake needs 3 steps to confirm both sides can send AND receive. Termination needs 4 steps because TCP is full-duplex — each side independently closes its own direction, and the server may need extra time to finish sending before it's ready to close its side.
+
+**Q: Why is DNS mostly UDP-based?**
+Queries/responses are typically small, and UDP's lack of handshake overhead makes lookups faster — latency matters a lot for DNS since it happens before every new connection.
+
+**Q: What's the practical difference between a forward proxy and reverse proxy?**
+Forward proxy acts on behalf of the **client** (client knows about it, hiding client identity from servers); reverse proxy acts on behalf of the **server** (client doesn't know it exists, hiding backend architecture from clients).
+
+**Q: Why might you choose Layer 7 load balancing over Layer 4?**
+When routing decisions need to depend on request content — URL path-based routing, cookie-based session affinity, header inspection — Layer 4 can't see any of that, it only sees IP/port.
+
+**Q: What specific problem does HTTP/3 (QUIC) solve that HTTP/2 didn't?**
+TCP-level head-of-line blocking — even though HTTP/2 multiplexes streams at the application layer, a single lost TCP packet still blocks all streams on that connection until retransmitted. QUIC's independent per-stream loss recovery over UDP means a lost packet only blocks its own stream.
+
+**Q: Why does NAT matter less with IPv6?**
+IPv6's address space is so vast that every device could theoretically have its own public IP, removing the address-conservation motivation for NAT (though NAT may still be used for other reasons like network topology hiding).
+
+**Q: What's the difference between a VPN and a proxy in terms of scope?**
+A VPN typically encrypts and tunnels **all** of a device's network traffic at the OS/network level; a (forward) proxy typically only redirects traffic for a specific application/protocol that's explicitly configured to use it (e.g., just browser traffic).
+
+---
+
+## Suggested Study Approach
+1. Practice drawing the TCP 3-way handshake and 4-way termination from memory, labeling each flag (SYN/ACK/FIN) — a very common whiteboard ask.
+2. Be able to instantly map any given protocol/technology to its correct OSI layer.
+3. Rehearse the TCP vs UDP comparison and be ready to justify *why* specific real-world applications (video calls, gaming, DNS, file transfer) choose one over the other.
+4. Pair this section with Section 3 (APIs & HTTP) — HTTP/2, HTTP/3, WebSockets, and gRPC bridge both topics directly, and system-design interviews often expect you to connect networking fundamentals to API/architecture choices (e.g., "why would you use gRPC over REST for this microservice communication?").
+5. For system-design rounds, rehearse a load balancer + CDN + reverse proxy architecture diagram from memory — this combination appears in the vast majority of "design a scalable web service" prompts.

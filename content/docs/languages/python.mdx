@@ -1,0 +1,745 @@
+---
+title: "Python"
+description: "Python-specific interview fundamentals: the interpreter/GIL, memory model, the type system, mutability gotchas, decorators/generators, OOP mechanics, and concurrency — building ..."
+---
+Python-specific interview fundamentals: the interpreter/GIL, memory model, the type system, mutability gotchas, decorators/generators, OOP mechanics, and concurrency — building on the language-agnostic OOP guide, and drawing comparisons to Java/C++ where the contrast clarifies the concept.
+
+---
+
+## Table of Contents
+1. [How Python Runs (CPython, Bytecode, GIL)](#1-how-python-runs-cpython-bytecode-gil)
+2. [Memory Management & Garbage Collection](#2-memory-management--garbage-collection)
+3. [Mutable vs Immutable Types](#3-mutable-vs-immutable-types)
+4. [The Mutable Default Argument Trap](#4-the-mutable-default-argument-trap)
+5. [`is` vs `==`](#5-is-vs-)
+6. [Variable Scope & the LEGB Rule](#6-variable-scope--the-legb-rule)
+7. [Functions as First-Class Objects & Closures](#7-functions-as-first-class-objects--closures)
+8. [Decorators](#8-decorators)
+9. [Generators & Iterators](#9-generators--iterators)
+10. [`*args` and `**kwargs`](#10-args-and-kwargs)
+11. [List/Dict/Set Comprehensions](#11-listdictset-comprehensions)
+12. [OOP in Python](#12-oop-in-python)
+13. [Magic/Dunder Methods](#13-magicdunder-methods)
+14. [Multiple Inheritance & MRO](#14-multiple-inheritance--mro)
+15. [Duck Typing](#15-duck-typing)
+16. [Exception Handling](#16-exception-handling)
+17. [Context Managers (`with`)](#17-context-managers-with)
+18. [Data Structures: Built-ins](#18-data-structures-built-ins)
+19. [Concurrency: Threading, Multiprocessing, Asyncio](#19-concurrency-threading-multiprocessing-asyncio)
+20. [Type Hints](#20-type-hints)
+21. [Rapid-Fire Interview Q&A](#21-rapid-fire-interview-qa)
+
+---
+
+## 1. How Python Runs (CPython, Bytecode, GIL)
+
+**CPython** is the reference (and most widely used) implementation of Python, written in C. Like Java (JVM guide, Section 2), Python source is **compiled to an intermediate bytecode** (`.pyc` files, cached in `__pycache__`), which the **Python Virtual Machine (PVM)** then interprets — but unlike Java's JIT-compiling JVM, CPython's default interpreter executes bytecode purely by interpretation (no JIT), which is a core reason CPython is generally slower than Java/C++ for CPU-bound work. (Alternative implementations like **PyPy** *do* include a JIT compiler and can be significantly faster for long-running CPU-bound code.)
+
+**The GIL (Global Interpreter Lock) — the single most commonly asked Python-specific systems question:** CPython's GIL ensures that **only one thread executes Python bytecode at a time**, even on a multi-core machine — a design decision that greatly simplifies CPython's internal memory management (specifically, reference counting for garbage collection, Section 2) by avoiding the need for fine-grained locking around every object's reference count, at the cost of preventing true CPU-bound parallelism via threads.
+
+**What the GIL means practically (commonly asked to explain the real-world implication):**
+- **CPU-bound multithreaded code**: does **not** get faster with more threads in CPython — the GIL means only one thread runs Python bytecode at any instant, so multiple threads doing pure computation effectively serialize (with added context-switching overhead on top, making it sometimes *slower* than single-threaded).
+- **I/O-bound multithreaded code**: **does** benefit from threading — the GIL is explicitly **released** during blocking I/O operations (network calls, file reads, `time.sleep`), allowing other threads to run Python code while one thread waits on I/O.
+- **The standard workaround for CPU-bound parallelism**: use the **`multiprocessing`** module instead of `threading` — spawns separate OS **processes**, each with its own Python interpreter and its own GIL, achieving genuine parallel execution across CPU cores (at the cost of higher memory usage and the need for explicit IPC to share data between processes, ties to the OS guide's IPC section, since separate processes don't share memory by default).
+
+**Interview trap:** *"Why doesn't Python have true multithreading for CPU-bound work?"* Not a limitation of the *language* itself, but a specific implementation detail of **CPython** (the reference implementation) — other Python implementations (Jython on the JVM, IronPython on .NET) don't have a GIL and can achieve true multithreaded parallelism, though CPython remains by far the most widely used implementation in practice.
+
+---
+
+## 2. Memory Management & Garbage Collection
+
+Python uses **automatic memory management**, primarily via **reference counting**, supplemented by a **generational cyclic garbage collector**.
+
+**Reference Counting (the primary mechanism, commonly asked to explain):** Every object tracks how many references point to it; when an object's reference count drops to **zero** (no variable, container, or other object references it anymore), CPython **immediately** deallocates it — unlike Java's GC, which reclaims memory only periodically/lazily, Python's primary reclamation is deterministic and immediate.
+```python
+import sys
+x = [1, 2, 3]
+print(sys.getrefcount(x))  # includes the temporary reference from getrefcount's own argument passing
+y = x         # reference count increases
+del y         # reference count decreases
+```
+
+**The problem reference counting alone can't solve — reference cycles:** Two (or more) objects referencing each other (directly or indirectly) will never have their reference counts reach zero through normal means, even if nothing external references them anymore — a memory leak, if left unaddressed.
+```python
+a = {}
+b = {}
+a['b'] = b
+b['a'] = a  # a and b reference each other — reference counting alone can never free them
+del a, b    # the LOCAL variables are gone, but the two dicts still reference each other!
+```
+**The fix — Generational Cyclic Garbage Collector:** Python's `gc` module periodically scans for groups of objects that are only reachable from **within** the group itself (i.e., unreachable from any true "root" like a global variable or active stack frame) and collects them — using the same **generational hypothesis** as Java's GC (most objects die young; objects are promoted to older generations after surviving collection cycles), specifically to handle exactly the reference-cycle case reference counting misses.
+
+**Interview trap:** *"Does Python have a garbage collector, or does it use reference counting?"* **Both** — reference counting is the primary, immediate mechanism; the generational cyclic collector is a supplementary mechanism specifically for cycles that reference counting structurally cannot resolve on its own.
+
+---
+
+## 3. Mutable vs Immutable Types
+
+*(Directly ties to the OOP guide's Immutability section — Python's specific type categorization here.)*
+
+| Immutable | Mutable |
+|---|---|
+| `int`, `float`, `bool`, `complex` | `list` |
+| `str` | `dict` |
+| `tuple` | `set` |
+| `frozenset` | Most custom objects (unless deliberately designed to be immutable) |
+| `bytes` | `bytearray` |
+
+**What "immutable" actually means in Python (commonly asked to clarify precisely):** The object's **value cannot be changed in place** after creation — any operation that appears to "modify" it (e.g., string concatenation, `+=` on a tuple) actually creates and returns a **new** object, rebinding the variable name to point to that new object, rather than mutating the original.
+
+```python
+s = "hello"
+s += " world"  # creates a NEW string object; 's' is REBOUND to point to it — the original "hello" is unchanged (and now unreferenced)
+
+t = (1, 2, 3)
+# t[0] = 99  # TypeError — tuples cannot be mutated in place
+
+t2 = t + (4,) # creates an entirely NEW tuple; t itself is unchanged
+```
+
+**Why this distinction matters for function arguments (an extremely commonly asked "gotcha" question, ties to the Java guide's pass-by-value-of-reference discussion — the exact same underlying model applies to Python):**
+```python
+def modify_list(lst):
+    lst.append(4)          # MUTATES the shared list object — visible to caller
+
+def reassign_list(lst):
+    lst = [9, 9, 9]         # REBINDS the local name to a new object — caller's original list is untouched
+
+my_list = [1, 2, 3]
+modify_list(my_list)    # my_list is now [1, 2, 3, 4] — mutation propagated
+reassign_list(my_list)  # my_list is STILL [1, 2, 3, 4] — reassignment did NOT propagate
+```
+Python is, like Java, always **"pass by object reference"** (sometimes called "pass by assignment") — a copy of the reference is passed, so mutating the referenced object is visible to the caller, but rebinding the local parameter name to a different object is not.
+
+---
+
+## 4. The Mutable Default Argument Trap
+
+**One of the single most famous Python interview "gotcha" questions.** Default argument values are evaluated **only once**, at **function definition time** — not on each call — meaning a mutable default argument (like a list or dict) is **shared and persists across all calls** that don't explicitly override it.
+
+```python
+def append_to(item, target=[]):   # BUG — the [] is created ONCE, at def time, and reused across ALL calls
+    target.append(item)
+    return target
+
+print(append_to(1))  # [1]
+print(append_to(2))  # [1, 2]  ← surprising! Expected [2], but it's the SAME list object from the first call
+```
+
+**The fix (the standard idiomatic pattern — know this cold):**
+```python
+def append_to(item, target=None):
+    if target is None:
+        target = []   # a fresh list is created EVERY call, since this line runs at call time, not def time
+    target.append(item)
+    return target
+```
+
+**Interview trap:** *"Why does this happen — isn't the default supposed to reset each call?"* Because Python evaluates default argument expressions exactly **once**, when the `def` statement itself executes (creating the function object) — not each time the function is subsequently called. Since the default value is an object (the list), and objects persist/are mutable, every call that relies on the default is actually operating on the **exact same** object in memory.
+
+---
+
+## 5. `is` vs `==`
+
+*(Directly mirrors the distinction covered in the Java guide's `==` section — Python's spelling of the same underlying concept.)*
+
+**`==`**: Calls the object's `__eq__` method — checks **value/content equality** (can be overridden per class to define custom logical equality).
+**`is`**: Checks **identity** — whether both names refer to the **exact same object** in memory (equivalent to comparing `id(a) == id(b)`).
+
+```python
+a = [1, 2, 3]
+b = [1, 2, 3]
+print(a == b)  # True — same content
+print(a is b)  # False — different objects in memory
+
+c = a
+print(a is c)  # True — c is literally the same object as a
+```
+
+**Small integer & string caching (a classic "explain this surprising output" trivia question, directly parallel to Java's Integer caching):** CPython caches/interns small integers (typically **-5 to 256**) and some string literals as a performance optimization — meaning `is` comparisons on these specific values can appear to work "by coincidence," but this is a CPython **implementation detail**, not a language guarantee, and should never be relied upon.
+```python
+a = 100
+b = 100
+print(a is b)  # True — small int caching (implementation detail)
+
+a = 1000
+b = 1000
+print(a is b)  # False (typically) — outside the cached range, though NOT guaranteed by the language spec either way
+```
+
+**Interview trap:** *"When should you use `is` instead of `==`?"* Specifically and **only** for comparing against the singletons `None`, `True`, `False` (idiomatic Python: `if x is None:`, not `if x == None:`) — since these are guaranteed unique singleton objects, `is` is both faster (no `__eq__` call) and more semantically precise (explicitly checking identity/singleton-ness rather than a value-equality that could theoretically be overridden to behave unexpectedly for `None` comparisons).
+
+---
+
+## 6. Variable Scope & the LEGB Rule
+
+Python resolves a variable name by searching through scopes in a specific order — the **LEGB rule** (commonly asked to name and explain):
+
+- **L — Local**: the innermost function's own local scope.
+- **E — Enclosing**: any enclosing (outer) function's scope, in the case of nested functions (relevant to closures, Section 7).
+- **G — Global**: the module-level (file-level) scope.
+- **B — Built-in**: Python's built-in names (`len`, `print`, `range`, etc.).
+
+```python
+x = "global"
+def outer():
+    x = "enclosing"
+    def inner():
+        x = "local"
+        print(x)  # "local" — found at the Local scope first
+    inner()
+outer()
+```
+
+**`global` and `nonlocal` keywords (commonly asked to distinguish):**
+```python
+count = 0
+def increment():
+    global count       # without this, 'count += 1' would raise UnboundLocalError —
+    count += 1          # Python would treat 'count' as a NEW local variable being read before assignment
+
+def outer():
+    x = 0
+    def inner():
+        nonlocal x      # refers to the ENCLOSING function's x, not global — distinct from 'global'
+        x += 1
+    inner()
+    return x
+```
+
+**Interview trap — `UnboundLocalError` (a very commonly tested surprising behavior):** If a function assigns to a variable **anywhere** in its body, Python treats that variable as **local to the entire function** (even before the assignment line, and even if a same-named global exists) — so reading it *before* the assignment (rather than the intended global) raises `UnboundLocalError`, not the expected fallback to the global value.
+```python
+x = 10
+def func():
+    print(x)  # UnboundLocalError! Python sees 'x = 20' below and treats x as local for the WHOLE function body
+    x = 20
+```
+
+---
+
+## 7. Functions as First-Class Objects & Closures
+
+Functions in Python are **first-class objects** — they can be assigned to variables, passed as arguments, returned from other functions, and stored in data structures, exactly like any other value (directly underlies decorators, Section 8, and is the Python-native equivalent of the C++ guide's function pointers / the OOP guide's Strategy pattern).
+
+```python
+def greet(name): return f"Hello, {name}"
+say_hi = greet          # assign function to a variable
+print(say_hi("Alice"))  # call through the variable
+```
+
+**Closures:** A nested (inner) function that **"remembers"** and can access variables from its enclosing function's scope, even after the enclosing function has finished executing and returned.
+
+```python
+def make_multiplier(n):
+    def multiplier(x):
+        return x * n   # 'n' is captured from the enclosing scope — this is the closure
+    return multiplier
+
+times3 = make_multiplier(3)
+print(times3(10))  # 30 — 'n' (=3) is still accessible, even though make_multiplier() has already returned
+```
+
+**Interview trap — the classic "late binding" closure pitfall (extremely commonly tested):** Closures capture variables **by reference** (the variable name itself), not by the value at closure-creation time — so if a loop variable is captured in multiple closures created within that loop, **all** of them will see the loop variable's **final** value when they're eventually called, not the value at the time each closure was created.
+```python
+funcs = []
+for i in range(3):
+    funcs.append(lambda: i)   # each lambda captures the VARIABLE 'i', not its value at that iteration
+
+print([f() for f in funcs])  # [2, 2, 2] — NOT [0, 1, 2] as many people initially expect!
+
+# THE FIX — force early binding via a default argument (evaluated once, at definition time):
+funcs2 = []
+for i in range(3):
+    funcs2.append(lambda i=i: i)  # default arg captures the CURRENT value of i at each iteration
+print([f() for f in funcs2])  # [0, 1, 2] — correct
+```
+
+---
+
+## 8. Decorators
+
+A function that takes another function (or class) as input and returns a modified/wrapped version of it — Python's built-in syntax sugar (`@decorator`) for applying the **Decorator pattern** from the Design Patterns guide, at the language level.
+
+```python
+import functools
+
+def log_calls(func):
+    @functools.wraps(func)  # preserves the original function's __name__/__doc__ — see below
+    def wrapper(*args, **kwargs):
+        print(f"Calling {func.__name__}")
+        result = func(*args, **kwargs)
+        print(f"{func.__name__} returned {result}")
+        return result
+    return wrapper
+
+@log_calls
+def add(a, b):
+    return a + b
+
+add(2, 3)
+# Calling add
+# add returned 5
+```
+`@log_calls` above `def add(...)` is exactly equivalent to writing `add = log_calls(add)` immediately after the function definition — the decorator **replaces** the original function name's binding with the wrapped version.
+
+**Why `functools.wraps` matters (a commonly asked "why is this line here" question):** Without it, the wrapped function's introspection metadata (`__name__`, `__doc__`, etc.) would be **overwritten** by the wrapper function's own metadata (e.g., `add.__name__` would become `"wrapper"` instead of `"add"`) — `functools.wraps` copies this metadata from the original function onto the wrapper, preserving correct introspection/debugging behavior.
+
+**Decorators with arguments (commonly asked to demonstrate — requires an extra level of nesting):**
+```python
+def repeat(n):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            for _ in range(n):
+                result = func(*args, **kwargs)
+            return result
+        return wrapper
+    return decorator
+
+@repeat(3)
+def greet(): print("Hi")
+greet()  # prints "Hi" three times
+```
+
+**Common built-in/standard-library decorators (worth knowing by name):** `@staticmethod`, `@classmethod`, `@property` (Section 12), `@functools.lru_cache` (memoization — directly implements the memoized top-down DP pattern from the DSA guide with a single decorator line), `@functools.wraps`.
+
+---
+
+## 9. Generators & Iterators
+
+**Iterator protocol:** Any object implementing `__iter__()` (returns an iterator object) and `__next__()` (returns the next value, raises `StopIteration` when exhausted) — Python's `for` loop is essentially syntactic sugar that repeatedly calls `__next__()` under the hood (mirrors the general Iterator pattern from the Design Patterns guide).
+
+**Generators — the easiest way to create an iterator, using `yield`:** A function containing `yield` becomes a **generator function** — calling it doesn't execute the body immediately; it returns a generator object that executes the function's code **lazily**, one step at a time, **pausing** at each `yield` and resuming exactly where it left off on the next `next()` call, preserving all local state in between.
+
+```python
+def count_up_to(n):
+    i = 1
+    while i <= n:
+        yield i   # pauses here, returning i; resumes from this exact point on the next call
+        i += 1
+
+for num in count_up_to(5):
+    print(num)  # 1, 2, 3, 4, 5
+```
+
+**Why generators matter — memory efficiency (the single most commonly cited practical benefit):** Generators produce values **one at a time, on demand**, rather than computing and holding an entire sequence in memory upfront — critical for processing very large (or even infinite/unbounded) sequences that wouldn't fit in memory as a full `list`.
+```python
+def infinite_counter():
+    i = 0
+    while True:
+        yield i
+        i += 1
+# list(infinite_counter()) would hang forever / exhaust memory — but iterating lazily, taking only what's needed, works fine
+```
+
+**Generator expressions (the lazy analog of list comprehensions, Section 11):**
+```python
+squares_list = [x**2 for x in range(1000000)]   # computes and stores ALL million values immediately — high memory
+squares_gen  = (x**2 for x in range(1000000))    # computes each value lazily, one at a time, on demand — minimal memory
+```
+
+**Interview trap:** *"What's the difference between a generator and a regular function that returns a list?"* A regular function computes and returns the **entire** result at once (all held in memory simultaneously); a generator yields values **one at a time**, computing each lazily only when requested, using **constant memory** regardless of the (potentially unbounded) sequence length — a direct, practical application of the lazy-evaluation principle also seen in the Java guide's Streams discussion.
+
+---
+
+## 10. `*args` and `**kwargs`
+
+Allow a function to accept a **variable number** of positional and keyword arguments, respectively.
+
+```python
+def func(*args, **kwargs):
+    print(args)    # tuple of all extra positional arguments
+    print(kwargs)  # dict of all extra keyword arguments
+
+func(1, 2, 3, name="Alice", age=30)
+# args:   (1, 2, 3)
+# kwargs: {'name': 'Alice', 'age': 30}
+```
+
+**Unpacking (the reverse direction — commonly asked, and used constantly in real code):**
+```python
+def add(a, b, c): return a + b + c
+nums = [1, 2, 3]
+add(*nums)  # unpacks the list into 3 positional arguments — equivalent to add(1, 2, 3)
+
+params = {"a": 1, "b": 2, "c": 3}
+add(**params)  # unpacks the dict into keyword arguments — equivalent to add(a=1, b=2, c=3)
+```
+
+**Common real-world use case (worth mentioning): decorator wrappers (Section 8) universally use `*args, **kwargs`** to transparently forward an arbitrary wrapped function's arguments without needing to know its specific signature in advance.
+
+**Naming note:** `*args`/`**kwargs` are conventional **names**, not keywords — the meaningful syntax is the `*`/`**` prefix itself; you could technically name them `*things`/`**stuff`, though following the `args`/`kwargs` convention is strongly expected for readability.
+
+---
+
+## 11. List/Dict/Set Comprehensions
+
+Concise, declarative syntax for building collections — generally preferred over explicit `for` loops for simple transformations/filters, both for readability and (often) performance (comprehensions are typically implemented more efficiently at the bytecode level than an equivalent manual loop with repeated `.append()` calls).
+
+```python
+squares = [x**2 for x in range(10)]                          # list comprehension
+evens   = [x for x in range(20) if x % 2 == 0]                # with a filter condition
+squared_dict = {x: x**2 for x in range(5)}                    # dict comprehension
+unique_lengths = {len(word) for word in ["a", "bb", "ccc"]}   # set comprehension
+nested = [x*y for x in range(3) for y in range(3)]            # nested — equivalent to two nested for loops
+```
+
+**Interview trap — comprehensions have their own local scope (Python 3, commonly asked):** The loop variable inside a comprehension does **not** leak into the enclosing scope (unlike a regular `for` loop, whose loop variable persists after the loop in Python) — a deliberate scoping improvement made in Python 3 over Python 2's comprehension behavior.
+```python
+x = [i for i in range(5)]
+# print(i)  # NameError in Python 3 — 'i' is scoped to the comprehension only
+```
+
+**When NOT to use a comprehension (worth mentioning for a balanced answer):** If the transformation logic is complex (multiple conditions, side effects, multi-line logic), a comprehension can hurt readability rather than help it — an explicit `for` loop is often clearer at that point; comprehensions are best for genuinely simple, single-expression transformations/filters.
+
+---
+
+## 12. OOP in Python
+
+*(Builds directly on the OOP guide — Python's specific syntax and idioms here.)*
+
+```python
+class Animal:
+    species_count = 0  # class variable — shared across ALL instances
+
+    def __init__(self, name):       # constructor (technically an initializer — see below)
+        self.name = name             # instance variable — unique per instance
+        Animal.species_count += 1
+
+    def speak(self):                 # instance method — 'self' explicitly refers to the calling instance
+        return f"{self.name} makes a sound"
+
+    @classmethod
+    def get_count(cls):              # operates on the CLASS itself, not an instance
+        return cls.species_count
+
+    @staticmethod
+    def is_animal_name(name):        # doesn't need access to instance OR class state at all
+        return isinstance(name, str)
+```
+
+**`__init__` vs `__new__` (a more advanced but occasionally asked distinction):** `__new__` is the actual **object-creation** method (called first, allocates and returns the new instance — rarely overridden except for advanced cases like implementing immutable types or the Singleton pattern); `__init__` is the **initializer**, called automatically **after** `__new__` returns, to set up the already-created instance's initial state — this is why `__init__` is casually called "the constructor" even though it doesn't technically construct the object itself.
+
+**Instance method vs `@classmethod` vs `@staticmethod` (very commonly asked to compare — mirrors Java's static-method discussion):**
+| | Instance method | `@classmethod` | `@staticmethod` |
+|---|---|---|---|
+| First parameter | `self` (the instance) | `cls` (the class itself) | None (no implicit first param) |
+| Access to instance state | Yes | No | No |
+| Access to class state | Yes (via `self.__class__` or class name) | Yes (via `cls`) | No (unless referencing the class explicitly by name) |
+| Common use case | Normal object behavior | Alternative constructors (e.g., `Person.from_string(...)`), factory methods | Utility functions logically grouped with the class but needing no instance/class access |
+
+**Properties (`@property`) — Python's idiomatic approach to encapsulation (ties directly to the OOP guide's Encapsulation section):** Allows a method to be **accessed like an attribute** (no parentheses needed), enabling validation/computed logic behind what looks like simple attribute access — Python's answer to Java's getter/setter boilerplate, achieving the same encapsulation goal with cleaner syntax.
+```python
+class Circle:
+    def __init__(self, radius):
+        self._radius = radius   # leading underscore — conventional "internal use" marker (see below)
+
+    @property
+    def radius(self):
+        return self._radius
+
+    @radius.setter
+    def radius(self, value):
+        if value < 0:
+            raise ValueError("Radius cannot be negative")
+        self._radius = value
+
+c = Circle(5)
+c.radius = 10       # calls the setter — looks like plain attribute assignment, but runs validation logic
+print(c.radius)     # calls the getter — looks like plain attribute access
+```
+
+**Name mangling & Python's "privacy" conventions (commonly asked, since Python has no true `private` keyword):**
+- **`_single_underscore`**: a pure **convention** signaling "internal use, not part of the public API" — not enforced by the language at all; still fully accessible from outside.
+- **`__double_underscore`** (without trailing underscores): triggers **name mangling** — Python automatically renames the attribute internally to `_ClassName__attributeName`, making accidental access/collision (especially in subclasses) harder, though still technically possible if you know the mangled name — closer to genuine encapsulation than the single-underscore convention, but still not true language-enforced privacy like Java's `private`.
+
+**Interview trap:** *"Does Python have true private members like Java/C++?"* No — Python relies on **convention** (single underscore) and **name mangling** (double underscore) rather than compiler/interpreter-enforced access restriction; this reflects Python's broader philosophy often summarized as "we're all consenting adults here" — trusting developers to respect conventions rather than strictly enforcing them.
+
+---
+
+## 13. Magic/Dunder Methods
+
+Special methods (surrounded by double underscores, "dunder") that let custom classes integrate with Python's built-in syntax/operators/protocols — a very commonly probed area for demonstrating Python fluency beyond basic syntax.
+
+```python
+class Vector:
+    def __init__(self, x, y): self.x, self.y = x, y
+
+    def __repr__(self): return f"Vector({self.x}, {self.y})"      # unambiguous, dev-facing representation
+    def __str__(self): return f"({self.x}, {self.y})"             # readable, user-facing representation
+    def __add__(self, other): return Vector(self.x + other.x, self.y + other.y)  # enables '+' operator
+    def __eq__(self, other): return self.x == other.x and self.y == other.y      # enables '==' operator
+    def __len__(self): return 2                                    # enables len(vector)
+    def __getitem__(self, i): return [self.x, self.y][i]           # enables vector[0], and iteration!
+```
+
+**`__repr__` vs `__str__` (commonly asked to distinguish):** `__str__` is meant for a **readable, end-user-facing** string representation (used by `print()`, `str()`); `__repr__` is meant for an **unambiguous, developer-facing** representation, ideally one that could (in principle) recreate the object if `eval()`'d, and is used by the interactive interpreter's default display, inside containers (e.g., printing a `list` of objects uses each element's `__repr__`, not `__str__`), and as the fallback if `__str__` isn't defined. **Rule of thumb:** always implement `__repr__`; implement `__str__` only if a genuinely different, more user-friendly display is needed.
+
+**Common dunder methods worth knowing exist (a checklist for a well-rounded answer):** `__init__`/`__new__` (construction), `__eq__`/`__hash__` (equality — same paired-contract requirement as Java's `equals()`/`hashCode()`, Section 5 of the Java guide), `__lt__`/`__le__`/`__gt__`/`__ge__` (comparison operators, or use `functools.total_ordering` to derive the rest from just `__eq__` + one), `__len__`, `__getitem__`/`__setitem__` (indexing, and enables basic iteration as a fallback), `__iter__`/`__next__` (full iterator protocol, Section 9), `__enter__`/`__exit__` (context manager protocol, Section 17), `__call__` (makes an instance itself callable like a function).
+
+---
+
+## 14. Multiple Inheritance & MRO
+
+Unlike Java (single inheritance for classes, ties to the Java guide's Section 14), **Python supports true multiple inheritance** for classes.
+
+```python
+class A:
+    def greet(self): return "A"
+class B(A):
+    def greet(self): return "B"
+class C(A):
+    def greet(self): return "C"
+class D(B, C):
+    pass
+
+print(D().greet())  # "B" — determined by MRO, NOT simply "the first parent found via depth-first search"
+```
+
+**MRO (Method Resolution Order) — the C3 Linearization algorithm (commonly asked to explain, especially given the Diamond Problem from the OOP guide):** Python resolves which class's method to use in a multiple-inheritance scenario via a well-defined, deterministic algorithm called **C3 linearization**, producing a single, consistent ordering of ancestor classes that respects both **local precedence order** (a class's parents are considered before its grandparents) and **monotonicity** (a subclass's MRO is consistent with each of its parents' own MROs). You can inspect it directly:
+```python
+print(D.__mro__)  # (D, B, C, A, object) — the actual resolution order Python uses
+```
+
+**`super()` and cooperative multiple inheritance (commonly asked, especially in the context of the Diamond Problem):** `super()` doesn't literally mean "my direct parent class" — it means **"the next class in the MRO chain"**, which is what allows a chain of `super().__init__()` calls across multiple classes in a diamond hierarchy to each run **exactly once**, in the correct MRO order, rather than a naive approach risking a shared ancestor's `__init__` running multiple times.
+
+**Interview trap:** *"How does Python solve the Diamond Problem that C++ struggles with?"* Via the deterministic C3 linearization MRO algorithm, which guarantees a single, well-defined, consistent method resolution order for any valid multiple-inheritance hierarchy (Python will actually **refuse** to create a class — raising a `TypeError` — if a consistent linearization is impossible for the given hierarchy) — directly contrasting with C++'s more manual/ambiguous approach requiring explicit virtual inheritance to resolve diamond ambiguity (ties to the OOP guide's Diamond Problem discussion, Section 4).
+
+---
+
+## 15. Duck Typing
+
+*(Ties to the OOP guide's Section 5's mention of duck typing under polymorphism.)* Python's dynamic typing philosophy: **"If it walks like a duck and quacks like a duck, it's a duck"** — an object's suitability for an operation is determined by whether it has the **necessary methods/attributes at runtime**, not by its declared type or explicit interface implementation (contrasting with Java/C++'s typically more static, interface/inheritance-based polymorphism).
+
+```python
+class Duck:
+    def quack(self): return "Quack!"
+class Person:
+    def quack(self): return "I'm imitating a duck!"
+
+def make_it_quack(thing):
+    return thing.quack()  # doesn't care about thing's TYPE, only that it HAS a .quack() method
+
+make_it_quack(Duck())    # works
+make_it_quack(Person())  # also works — no shared base class/interface needed at all
+```
+
+**EAFP vs LBYL (a Python-specific idiom pairing, commonly asked to name and explain):**
+- **LBYL ("Look Before You Leap")**: check preconditions explicitly before attempting an operation (the more traditional, Java/C-style approach) — e.g., `if key in dict: value = dict[key]`.
+- **EAFP ("Easier to Ask Forgiveness than Permission")**: attempt the operation directly and handle the resulting exception if it fails — the more idiomatic, commonly preferred Python style, since it avoids redundant checks (a **TOCTOU** — time-of-check to time-of-use — race in concurrent contexts, and is often simply more efficient in the common case) and pairs naturally with duck typing (you don't need to verify an object's type/capability upfront; just try the operation and catch the failure).
+```python
+# LBYL
+if "key" in my_dict:
+    value = my_dict["key"]
+else:
+    value = default
+
+# EAFP — the more idiomatically Pythonic approach
+try:
+    value = my_dict["key"]
+except KeyError:
+    value = default
+```
+
+---
+
+## 16. Exception Handling
+
+*(Builds on the OOP guide's general Exception Handling section — Python-specific hierarchy and syntax here.)*
+
+```python
+try:
+    result = 10 / divisor
+except ZeroDivisionError as e:
+    print(f"Cannot divide by zero: {e}")
+except (TypeError, ValueError) as e:  # tuple — catch multiple exception types with shared handling
+    print(f"Bad input: {e}")
+else:
+    print("No exception occurred")     # runs ONLY if the try block succeeded without any exception
+finally:
+    print("Always runs")               # runs regardless — cleanup, ties to the OOP guide's finally discussion
+```
+
+**The `else` clause on `try` (a Python-specific feature, commonly asked since Java/C++ lack a direct equivalent):** Runs **only if the `try` block completed without raising** any exception — useful for code that should run after a successful `try` but that you explicitly **don't** want wrapped in the same `try` (so that exceptions raised in the `else` block itself aren't accidentally caught by the preceding `except` clauses meant for the `try` block's own logic).
+
+**Custom exceptions:**
+```python
+class InsufficientFundsError(Exception):
+    def __init__(self, message, balance):
+        super().__init__(message)
+        self.balance = balance
+
+raise InsufficientFundsError("Not enough funds", balance=50)
+```
+
+**Python doesn't have checked exceptions (a notable contrast with Java, commonly asked to compare):** Unlike Java (Section 11 of the Java guide), Python has **no** compiler/interpreter-enforced distinction between "checked" and "unchecked" exceptions — **all** exceptions in Python behave like Java's unchecked `RuntimeException`s: nothing forces a caller to catch or declare them, and this is a deliberate design philosophy consistent with Python's general preference for runtime flexibility over compile-time enforcement.
+
+**`raise ... from ...` (exception chaining, worth knowing exists):** `raise NewException("...") from original_exception` explicitly links a new exception to the original one that caused it (preserved in the traceback as "the above exception was the direct cause of the following exception"), useful when translating a low-level exception into a more domain-appropriate one without losing the original diagnostic context.
+
+---
+
+## 17. Context Managers (`with`)
+
+Python's language-level mechanism for guaranteed setup/teardown around a block of code — the Python-native equivalent of C++'s RAII pattern (ties directly to the C++ guide's Section 9) and Java's try-with-resources (Java guide, Section 11), but implemented via an explicit protocol rather than automatic destructor invocation or a special interface.
+
+```python
+with open("file.txt") as f:
+    data = f.read()
+# f.close() is called AUTOMATICALLY here, even if an exception occurred inside the with block
+```
+
+**The context manager protocol (`__enter__`/`__exit__`) — commonly asked to implement from scratch:**
+```python
+class ManagedResource:
+    def __enter__(self):
+        print("Acquiring resource")
+        return self  # the value bound to 'as' in the with statement
+    def __exit__(self, exc_type, exc_value, traceback):
+        print("Releasing resource")
+        return False  # False (or None) means: don't suppress any exception that occurred; True would swallow it
+
+with ManagedResource() as r:
+    print("Using resource")
+```
+
+**The `__exit__` return value (a subtle, commonly-tested detail):** If `__exit__` returns a **truthy** value, any exception that occurred inside the `with` block is **suppressed** (swallowed silently, execution continues after the `with` block as if nothing happened) — a powerful but easy-to-misuse feature; returning `False`/`None` (the typical, safe default) lets exceptions propagate normally after cleanup runs.
+
+**`contextlib.contextmanager` (a simpler, decorator-based alternative to writing a full class, worth knowing exists):**
+```python
+from contextlib import contextmanager
+
+@contextmanager
+def managed_resource():
+    print("Acquiring")
+    try:
+        yield "resource"       # everything before yield = __enter__ logic; the yielded value = the 'as' value
+    finally:
+        print("Releasing")     # everything after yield (in finally) = __exit__ logic, guaranteed to run
+
+with managed_resource() as r:
+    print(f"Using {r}")
+```
+
+---
+
+## 18. Data Structures: Built-ins
+
+*(Maps directly onto the general Data Structures covered in the DSA guide — Python's specific built-in implementations here.)*
+
+| Python Type | Underlying Structure | Notes |
+|---|---|---|
+| `list` | Dynamic array | O(1) index access/append (amortized); O(n) insert/delete at arbitrary position |
+| `tuple` | Fixed-size array (immutable) | Like `list` but cannot be modified after creation — usable as a `dict` key (since it's hashable), unlike `list` |
+| `dict` | Hash table | O(1) average access/insert/delete; **insertion order preserved** since Python 3.7 (an implementation detail promoted to a language guarantee) |
+| `set` | Hash table (like `dict`, values-only) | O(1) average membership test/insert/delete; no ordering guarantee |
+| `collections.deque` | Doubly linked list (of blocks) | O(1) append/pop from **both** ends — unlike `list`, whose `.pop(0)`/`.insert(0, x)` are O(n) |
+| `collections.defaultdict` | `dict` subclass | Auto-initializes missing keys with a factory function, avoiding manual `if key not in dict` checks |
+| `collections.Counter` | `dict` subclass | Specialized for counting hashable objects — `Counter(items).most_common(n)` |
+| `heapq` module | Binary min-heap, operating on a plain `list` | O(log n) push/pop — Python's `heapq` module provides only a **min-heap**; simulate a max-heap by negating values on insert/extraction |
+
+**Why `tuple` can be a dict key but `list` cannot (a commonly asked "why" question, ties to the Java guide's mutable-hashkey discussion):** Dictionary keys must be **hashable**, and mutable objects are (by design/convention) unhashable in Python precisely **because** their content — and thus their hash value — could change after being used as a key, which would corrupt the hash table's internal bucket placement (the exact same underlying concern discussed in the OOP guide's Immutability section and the Java guide's `hashCode()` contract).
+
+**`list.append()` vs `list.extend()` (a commonly tested distinction):** `.append(x)` adds `x` as a **single** new element (even if `x` is itself a list, it's added as one nested element); `.extend(iterable)` adds **each element of the iterable individually** to the list.
+```python
+a = [1, 2]
+a.append([3, 4])  # a is now [1, 2, [3, 4]] — the list is added as ONE element
+b = [1, 2]
+b.extend([3, 4])  # b is now [1, 2, 3, 4] — each element added individually
+```
+
+---
+
+## 19. Concurrency: Threading, Multiprocessing, Asyncio
+
+Python offers **three distinct concurrency models**, each suited to different workload types — a very commonly asked "which would you use when" comparison.
+
+| Model | Best for | Parallelism | Overhead |
+|---|---|---|---|
+| `threading` | I/O-bound tasks (network calls, file I/O) | No true CPU parallelism (GIL, Section 1) — but concurrency is still achieved during I/O waits | Low memory overhead, but GIL contention for CPU-bound work |
+| `multiprocessing` | CPU-bound tasks (heavy computation) | **True parallelism** — separate processes, separate GILs, separate memory | Higher overhead (process creation, IPC needed to share data) |
+| `asyncio` | High-volume I/O-bound tasks (many concurrent network connections) | Single-threaded, cooperative concurrency (not true parallelism) | Very low overhead per task — can handle thousands of concurrent I/O operations efficiently, far more than an equivalent number of OS threads could |
+
+**`asyncio` basics (`async`/`await`, commonly asked to demonstrate):**
+```python
+import asyncio
+
+async def fetch_data():
+    print("Start fetching")
+    await asyncio.sleep(2)  # non-blocking "sleep" — yields control back to the event loop during the wait
+    print("Done fetching")
+    return "data"
+
+async def main():
+    result = await fetch_data()
+    print(result)
+
+asyncio.run(main())
+```
+
+**How `asyncio` achieves concurrency without threads (commonly asked to explain the mechanism):** A single-threaded **event loop** runs multiple **coroutines** (functions defined with `async def`), cooperatively switching between them at each `await` point — when a coroutine hits an `await` on an I/O operation, it voluntarily **yields control** back to the event loop, which can then run another ready coroutine, rather than blocking the entire thread waiting idly — achieving high I/O concurrency with the overhead of just one OS thread, unlike `threading`'s one-OS-thread-per-task model.
+
+**`threading` vs `multiprocessing` vs `asyncio` — the key decision framework (very commonly asked to synthesize):**
+- **CPU-bound work → `multiprocessing`** (only way to achieve genuine parallel computation in CPython, bypassing the GIL entirely via separate processes).
+- **I/O-bound, moderate concurrency → `threading`** (simpler shared-memory model than multiprocessing, GIL is released during I/O so threads still help here).
+- **I/O-bound, very high concurrency (thousands of simultaneous connections) → `asyncio`** (far lower per-task overhead than OS threads, purpose-built for exactly this scenario — e.g., handling many simultaneous network connections in a web server).
+
+---
+
+## 20. Type Hints
+
+Optional, **not enforced at runtime by the interpreter itself** (Python remains dynamically typed regardless of hints) — type hints exist primarily to enable **static analysis tools** (`mypy`, IDEs, linters) to catch type errors **before** runtime, and to serve as inline documentation.
+
+```python
+def add(a: int, b: int) -> int:
+    return a + b
+
+from typing import List, Dict, Optional, Union
+
+def process(items: List[str], config: Dict[str, int], name: Optional[str] = None) -> Union[int, str]:
+    ...
+```
+
+**Interview trap:** *"Do type hints make Python statically typed?"* No — they're purely advisory/optional annotations; the Python interpreter itself performs **no** type checking based on them at runtime (you can pass a `str` to a parameter hinted as `int` and Python will happily attempt to run the code, likely failing later with a runtime `TypeError` from the actual operation, not from the hint itself) — genuine type safety requires a separate static analysis tool like `mypy` run as part of a CI/development workflow, since the language runtime itself doesn't enforce hints.
+
+---
+
+## 21. Rapid-Fire Interview Q&A
+
+**Q: What is the GIL, and what's its practical impact?**
+CPython's Global Interpreter Lock ensures only one thread executes Python bytecode at a time — CPU-bound multithreaded code gets no real parallelism benefit (use `multiprocessing` instead), while I/O-bound multithreaded code still benefits since the GIL is released during I/O waits.
+
+**Q: Why is the mutable default argument pattern dangerous, and what's the fix?**
+Default argument values are evaluated once at function-definition time, not per call — a mutable default (like `[]`) is shared and persists across all calls. Fix: use `None` as the default and initialize the mutable object inside the function body.
+
+**Q: `is` vs `==` — when should you use each?**
+`==` checks value/content equality (calls `__eq__`); `is` checks object identity. Use `is` specifically for singleton comparisons (`is None`, `is True`); use `==` for everything else, including most object comparisons.
+
+**Q: Why did the classic "closures in a loop" example print `[2, 2, 2]` instead of `[0, 1, 2]`?**
+Closures capture variables by reference (the variable itself), not by value at creation time — all closures created in the loop share the same loop variable, which holds its final value by the time any closure is actually called. Fix: force early binding via a default argument.
+
+**Q: What's the difference between a list comprehension and a generator expression?**
+A list comprehension eagerly computes and stores the entire result in memory immediately; a generator expression lazily computes each value on demand, using constant memory — critical for large or unbounded sequences.
+
+**Q: How does Python resolve the Diamond Problem in multiple inheritance?**
+Via C3 linearization, producing a deterministic Method Resolution Order (MRO) — `super()` calls the next class in this MRO chain (not literally "my parent"), ensuring each ancestor's method runs exactly once even in diamond hierarchies.
+
+**Q: Why can't a `list` be used as a dictionary key, but a `tuple` can?**
+Dictionary keys must be hashable, and mutable objects are unhashable by design — since a mutable object's content (and thus hash) could change after insertion, corrupting the hash table's internal structure. Tuples are immutable and therefore hashable (as long as all their elements are also hashable).
+
+**Q: EAFP vs LBYL — which does idiomatic Python prefer, and why?**
+EAFP ("Easier to Ask Forgiveness than Permission") — attempt the operation and catch the exception if it fails, rather than checking preconditions upfront (LBYL). It's more idiomatic in Python, avoids redundant checks/race conditions, and pairs naturally with duck typing.
+
+**Q: threading vs multiprocessing vs asyncio — how do you choose?**
+CPU-bound work needs `multiprocessing` (true parallelism, bypasses the GIL via separate processes); I/O-bound work with moderate concurrency suits `threading`; I/O-bound work needing very high concurrency (thousands of simultaneous connections) suits `asyncio`'s low-overhead cooperative event loop.
+
+**Q: Do Python type hints get enforced at runtime?**
+No — they're purely advisory, used by static analysis tools like `mypy` and IDEs; the Python interpreter itself performs no type checking based on them, and mismatched types will only fail later if/when an incompatible operation is actually attempted.
+
+---
+
+## Suggested Study Approach
+1. Be able to explain the GIL's practical impact and the threading/multiprocessing/asyncio decision framework fluently — this is the single most distinctive, most commonly asked Python-specific systems question.
+2. Practice the mutable-default-argument trap and the closures-in-a-loop trap from memory, including the fixes — both are extremely popular "gotcha" interview questions with a strong signal-to-noise ratio for interviewers.
+3. Rehearse implementing a class with `__init__`, `__repr__`, `__eq__`, and at least one operator overload (`__add__` or similar) from scratch — a common live-coding request to test dunder-method fluency.
+4. Pair this guide with the OOP guide (Python's `@property`, MRO, and duck typing are direct, idiomatic implementations of concepts covered there) and the Java guide (contrasting Python's dynamic-typing/GIL model against Java's static-typing/JVM-threading model is a common comparative interview question for candidates who know both).
+5. Practice writing a generator function and a decorator with arguments from scratch — both are common "write this from memory" live-coding requests that test genuine fluency beyond surface-level syntax familiarity.

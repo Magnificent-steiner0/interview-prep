@@ -1,0 +1,641 @@
+---
+title: "DSA & Complexity"
+description: "The core of technical coding interviews. Covers complexity analysis, every data structure and algorithm category in the roadmap, with definitions, complexities, code sketches, a..."
+---
+The core of technical coding interviews. Covers complexity analysis, every data structure and algorithm category in the roadmap, with definitions, complexities, code sketches, and when to reach for each tool.
+
+---
+
+## Table of Contents
+1. [Complexity Analysis](#1-complexity-analysis)
+2. [Data Structures](#2-data-structures)
+   - Arrays & Strings, Linked Lists, Stack, Queue, Hash Map, Heap, Trees, BST, Trie, Segment Tree, Fenwick Tree, Graph, Union Find
+3. [Algorithms](#3-algorithms)
+   - Binary Search, Sorting, Sliding Window, Two Pointers, Prefix Sum, DFS, BFS, Topological Sort, Shortest Path, MST, DP, Greedy, Backtracking, Bit Manipulation
+4. [Complexity Cheat Sheet](#4-complexity-cheat-sheet)
+5. [Pattern Recognition Guide](#5-pattern-recognition-guide)
+6. [Rapid-Fire Interview Q&A](#6-rapid-fire-interview-qa)
+
+---
+
+# 1. Complexity Analysis
+
+## Big-O, Big-Θ, Big-Ω (classic "explain the difference" question)
+
+- **Big-O (O)**: **Upper bound** — the algorithm's running time grows *no faster than* this, in the **worst case**. This is what people almost always mean colloquially by "time complexity."
+- **Big-Omega (Ω)**: **Lower bound** — the algorithm takes *at least* this long, in the **best case**.
+- **Big-Theta (Θ)**: **Tight bound** — the algorithm's growth rate is *exactly* this (both upper and lower bound coincide asymptotically). Used when best and worst case have the same order of growth.
+
+```
+Example: Linear search on an array of n elements
+- Best case (Ω):  O(1) — target is the first element
+- Worst case (O): O(n) — target is the last element or absent
+- Θ doesn't apply cleanly here since best/worst differ in order of growth
+```
+
+**Interview trap:** Saying "Big-O" when you mean "Big-Theta" is extremely common and usually harmless colloquially, but a strong candidate can correctly distinguish them when asked directly — e.g., "insertion sort is O(n²) worst case, but Ω(n) best case (nearly sorted input), so it's not Θ(n²)."
+
+## Amortized Analysis
+
+The **average** time per operation over a sequence of operations, even if occasional individual operations are expensive — used when a data structure has rare costly operations that "pay off" cheap operations over time.
+
+**Classic example: Dynamic array (`ArrayList`/`Vector`) `push_back`:**
+- Most pushes are O(1) (just add to the next free slot).
+- Occasionally, the array is full and must **resize** (typically double in size) — an O(n) operation copying all elements.
+- But resizing happens exponentially less often as the array grows (at sizes 1, 2, 4, 8, 16...) — spreading that O(n) cost across all the O(1) pushes since the last resize averages out to **O(1) amortized** per push.
+
+**Interview trap:** *"Isn't `push_back` sometimes O(n)? How can you call it O(1)?"* Correct — a *single* push can be O(n) in the worst case (the resize), but the **amortized** cost across many pushes is O(1). Be ready to explain the doubling-strategy math: if you double capacity each resize, the total cost of all resizes up to n elements is `1+2+4+...+n ≈ 2n`, which is O(n) total for n insertions, i.e., O(1) amortized per insertion.
+
+## Common complexity classes (ordered, worth reciting from memory)
+
+```
+O(1) < O(log n) < O(n) < O(n log n) < O(n²) < O(n³) < O(2^n) < O(n!)
+```
+- `O(1)` — Constant: hash map lookup, array index access.
+- `O(log n)` — Logarithmic: binary search, balanced BST operations.
+- `O(n)` — Linear: single pass through an array.
+- `O(n log n)` — Linearithmic: efficient sorting (merge sort, heap sort, quicksort average case).
+- `O(n²)` — Quadratic: nested loops, naive comparison sorts (bubble/insertion/selection sort).
+- `O(2^n)` — Exponential: naive recursive Fibonacci, generating all subsets.
+- `O(n!)` — Factorial: generating all permutations, brute-force traveling salesman.
+
+**Space complexity** follows the same notation but measures **extra memory** used relative to input size (not counting the input itself, typically) — commonly asked alongside time complexity for any solution ("what's the space complexity of your approach?").
+
+---
+
+# 2. Data Structures
+
+## Arrays & Strings
+
+**Array**: Contiguous block of memory, fixed size (in low-level languages) or dynamically resized (in most high-level languages/collections).
+- Access by index: **O(1)**.
+- Search (unsorted): **O(n)**. Search (sorted, via binary search): **O(log n)**.
+- Insert/Delete at end: **O(1)** amortized. Insert/Delete at arbitrary position: **O(n)** (must shift elements).
+
+**String**: Often implemented as an array of characters. Key interview consideration: **mutability**. In Java/Python/JS, strings are **immutable** — every "modification" (concatenation, etc.) creates a new string, making naive string-building in a loop **O(n²)** total (each concatenation is O(n), done n times). Use a mutable buffer (`StringBuilder` in Java, list + `''.join()` in Python, array + `.join()` in JS) to get **O(n)** total instead.
+
+**Interview trap:** *"What's the time complexity of `s += char` in a loop, n times, in Python?"* O(n²) naively (each `+=` may create a new string of growing length), though CPython has some internal optimizations for this specific pattern — the *correct, portable* answer to give in an interview is to use a list and `''.join()` for guaranteed O(n).
+
+## Linked Lists
+
+A sequence of nodes, each holding data + a pointer/reference to the next node (and, for doubly linked lists, the previous node too).
+
+```
+Singly:  [1|next] -> [2|next] -> [3|next] -> null
+Doubly:  null <- [1|prev|next] <-> [2|prev|next] <-> [3|prev|next] -> null
+```
+
+| Operation | Array | Linked List |
+|---|---|---|
+| Access by index | O(1) | O(n) |
+| Insert/Delete at head | O(n) (shift) | O(1) |
+| Insert/Delete at tail | O(1) amortized | O(1) if tail pointer kept, else O(n) |
+| Insert/Delete in middle (given node reference) | O(n) | O(1) |
+| Memory overhead | Low (contiguous) | Higher (pointer per node) |
+| Cache locality | Good (contiguous memory) | Poor (scattered in heap) |
+
+**Classic problems (know these cold):**
+- **Reverse a linked list**: iteratively track `prev`, `curr`, `next` pointers — O(n) time, O(1) space.
+- **Detect a cycle**: **Floyd's Cycle Detection (slow/fast pointer / "tortoise and hare")** — two pointers move at different speeds (1 step, 2 steps); if there's a cycle, they will eventually meet. O(n) time, O(1) space.
+- **Find the middle node**: slow/fast pointer again — when fast reaches the end, slow is at the middle, in one pass.
+- **Merge two sorted lists**: classic building block for merge sort on linked lists.
+
+## Stack
+
+**LIFO (Last In, First Out)** structure. Core operations: `push`, `pop`, `peek/top` — all **O(1)**.
+
+**Common uses (frequently tested):**
+- **Balanced parentheses/brackets validation**: push opening brackets, pop and match on closing brackets.
+- **Undo functionality** (ties to the Memento pattern from Section 2 of the roadmap).
+- **Function call stack**: how recursion is implemented under the hood — every recursive call pushes a stack frame; **stack overflow** occurs when recursion depth exceeds available stack space, a common interview gotcha for deep recursion without tail-call optimization (most mainstream languages don't optimize tail calls).
+- **Monotonic stack**: a stack kept in increasing or decreasing order, used to efficiently solve "next greater/smaller element" style problems in O(n) instead of a naive O(n²).
+
+## Queue
+
+**FIFO (First In, First Out)** structure. Core operations: `enqueue` (add to back), `dequeue` (remove from front) — both **O(1)** with a proper implementation (e.g., a circular buffer or linked list; a naive array-based queue with `dequeue` via `shift()` is O(n)).
+
+**Variants (commonly asked to name):**
+- **Circular Queue**: fixed-size buffer that wraps around, avoiding wasted space from a naive array queue.
+- **Deque (Double-Ended Queue)**: insertion/removal from both ends in O(1) — used for sliding window problems (Section 3).
+- **Priority Queue**: not strictly FIFO — elements dequeued by priority rather than insertion order; typically implemented via a **Heap** (see below).
+
+**Common uses:** BFS traversal (Section 3), task scheduling, buffering (producer-consumer patterns).
+
+## Hash Map
+
+Stores key-value pairs, using a **hash function** to map keys to array indices ("buckets") for near-constant-time access.
+
+- Average case: **O(1)** for insert, delete, lookup.
+- Worst case: **O(n)** if many keys collide into the same bucket (degenerates to a linked list traversal within that bucket) — mitigated by a good hash function and dynamic resizing.
+
+**Collision resolution strategies (commonly asked to explain):**
+- **Chaining**: each bucket holds a linked list (or small tree, in some modern implementations like Java 8+ HashMap for large buckets) of all entries hashing to that index.
+- **Open Addressing** (linear probing, quadratic probing, double hashing): on a collision, probe for the next available slot within the array itself, rather than using external chains.
+
+**Load factor**: `number of entries / number of buckets` — when this exceeds a threshold (commonly 0.75), the hash map **resizes** (rehashes all entries into a larger bucket array), which is where the amortized-O(1) reasoning (Section 1) applies again.
+
+**Interview trap:** *"Why do you need a good `hashCode()` AND `equals()` implementation for custom objects used as hash map keys (Java)?"* If two objects are `.equals()`, they **must** have the same `hashCode()` (the contract) — otherwise the hash map might place "equal" objects in different buckets and fail to recognize them as the same key, breaking lookups.
+
+## Heap
+
+A complete binary tree satisfying the **heap property**: in a **min-heap**, every parent ≤ its children (root is the minimum); in a **max-heap**, every parent ≥ its children (root is the maximum). Typically implemented as an **array** (no explicit pointers needed) using index arithmetic: for a node at index `i`, its children are at `2i+1` and `2i+2`, and its parent is at `(i-1)/2`.
+
+| Operation | Complexity |
+|---|---|
+| Peek min/max (root) | O(1) |
+| Insert | O(log n) |
+| Extract min/max | O(log n) |
+| Build heap from array | O(n) (not O(n log n) — a commonly missed subtlety, achieved via bottom-up heapify) |
+
+**Common uses (very frequently tested):**
+- **Priority Queue** implementation.
+- **Heap Sort** (Section 3).
+- **"Top K" problems**: find the k largest/smallest elements — maintain a heap of size k, O(n log k) instead of sorting the whole array (O(n log n)).
+- **Merge k sorted lists**: use a min-heap of size k holding the current head of each list — O(n log k).
+- **Median of a data stream**: maintain a max-heap for the lower half and a min-heap for the upper half of seen numbers, balancing sizes — allows O(log n) insertion and O(1) median retrieval.
+
+## Trees
+
+A hierarchical structure of nodes, each with a value and references to child nodes, with one root and no cycles.
+
+**Key terminology (commonly quizzed):** root, leaf, height (longest path from a node to a leaf), depth (path length from root to a node), balanced (height difference between subtrees is bounded, e.g., ≤1 for AVL trees).
+
+**Traversal types (know all four, be able to code them recursively AND iteratively):**
+- **Preorder** (Root → Left → Right): useful for copying/serializing a tree.
+- **Inorder** (Left → Root → Right): for a **BST**, this visits nodes in **sorted order** — a critical fact.
+- **Postorder** (Left → Right → Root): useful for deleting a tree, or evaluating expression trees.
+- **Level-order (BFS)**: visits nodes level by level, using a queue.
+
+```python
+def inorder(node):
+    if not node: return
+    inorder(node.left)
+    print(node.val)
+    inorder(node.right)
+```
+
+## BST (Binary Search Tree)
+
+A binary tree where, for every node: all values in the **left** subtree are **less than** the node's value, and all values in the **right** subtree are **greater than** it (assuming no duplicates).
+
+| Operation | Average (balanced) | Worst case (degenerate/unbalanced) |
+|---|---|---|
+| Search | O(log n) | O(n) |
+| Insert | O(log n) | O(n) |
+| Delete | O(log n) | O(n) |
+
+**Why worst case is O(n):** If elements are inserted in already-sorted order, a naive BST degenerates into a linked list (every node has only one child) — this is exactly why **self-balancing BSTs** exist.
+
+**Self-balancing BSTs (worth naming, rarely need to implement from scratch in interviews):**
+- **AVL Tree**: strictly balanced (height difference ≤1 between subtrees at every node), rebalances via rotations on every insert/delete — guarantees O(log n) but with more rotation overhead.
+- **Red-Black Tree**: a looser balancing guarantee than AVL (allows more imbalance) but requires fewer rotations — the standard choice for many language library implementations (e.g., Java's `TreeMap`, C++'s `std::map`) because it balances lookup speed and insert/delete speed well.
+
+**Deletion cases (commonly asked to explain):** Deleting a BST node with (1) no children — just remove it; (2) one child — replace the node with its child; (3) two children — replace the node's value with its **inorder successor** (smallest value in the right subtree) or **inorder predecessor** (largest value in the left subtree), then delete that successor/predecessor node instead (which is guaranteed to have at most one child).
+
+## Trie (Prefix Tree)
+
+A tree structure specialized for storing and searching strings, where each node represents a character, and paths from the root represent prefixes of stored words.
+
+```
+Words: "cat", "car", "card"
+
+        root
+         |
+         c
+         |
+         a
+        / \
+       t   r
+           |
+           d
+```
+
+| Operation | Complexity (m = length of word) |
+|---|---|
+| Insert | O(m) |
+| Search (exact word) | O(m) |
+| Search (prefix exists) | O(m) |
+
+**Why use a Trie over a hash set of strings?** A hash set can check exact-word existence in O(m) too, but **cannot efficiently answer prefix queries** ("what words start with 'ca'?") without scanning every entry. A Trie supports prefix queries in O(m + k) where k is the number of matching results, making it the standard choice for **autocomplete**, spell-checkers, and IP routing (longest prefix matching).
+
+Each Trie node typically stores a fixed-size array (or hash map) of children (one per possible next character) and a boolean flag marking whether a complete word ends at that node.
+
+## Segment Tree
+
+A binary tree used for efficiently answering **range queries** (sum, min, max, GCD over a range) **and** supporting **point/range updates** on an underlying array — both in O(log n), which is a major improvement over the naive O(n) per query/update.
+
+```
+Array: [1, 3, 5, 7, 9, 11]
+Segment tree represents range sums, built bottom-up, each internal node = combination (e.g., sum) of its two children's ranges
+```
+
+| Operation | Naive Array | Prefix Sum Array | Segment Tree |
+|---|---|---|---|
+| Range query (sum/min/max) | O(n) | O(1) | O(log n) |
+| Point update | O(1) | O(n) (must rebuild prefix sums) | O(log n) |
+
+**Why Segment Tree over Prefix Sum?** Prefix sums answer range-sum queries in O(1), but any single **update** to the underlying array requires O(n) to rebuild — bad if updates are frequent. Segment trees give up O(1) query for O(log n) query, but gain O(log n) updates too — the right trade-off whenever the data changes frequently and you still need fast range queries. **Interview trap:** this trade-off (O(1) query/O(n) update vs O(log n)/O(log n)) is a very common "which structure would you use" follow-up question.
+
+**Fenwick Tree is often preferred over Segment Tree** for simpler cases (see next section) due to less code/overhead, but Segment Trees are more general (support min/max/GCD, not just sums, and more complex range operations like range updates with lazy propagation).
+
+## Fenwick Tree (Binary Indexed Tree, BIT)
+
+A more compact, simpler-to-implement data structure than a Segment Tree, specifically optimized for **prefix sum** queries and point updates, using clever bit manipulation (each index is responsible for a range determined by its lowest set bit).
+
+| Operation | Complexity |
+|---|---|
+| Point update | O(log n) |
+| Prefix sum query | O(log n) |
+| Range sum query (via two prefix queries) | O(log n) |
+
+**Fenwick vs Segment Tree (classic comparison question):**
+| | Fenwick Tree (BIT) | Segment Tree |
+|---|---|---|
+| Code complexity | Simpler (roughly 10-15 lines) | More complex (roughly 40-60 lines) |
+| Memory | O(n) | O(4n) typically (array-based implementation with padding) |
+| Supported operations | Primarily prefix sums / cumulative frequency (sum, or invertible operations) | Any associative operation (sum, min, max, GCD), plus supports lazy propagation for efficient range updates |
+| When to prefer | Simple range-sum-and-point-update problems | Non-sum operations (min/max), or need for range updates affecting many elements at once |
+
+## Graph
+
+A set of **vertices (nodes)** connected by **edges**, which may be **directed** or **undirected**, and **weighted** or **unweighted**.
+
+**Representations (commonly asked to compare):**
+- **Adjacency Matrix**: 2D array `matrix[i][j] = 1` (or weight) if an edge exists between `i` and `j`.
+  - Space: O(V²). Edge lookup: O(1). Iterating all edges of a node: O(V) (even if the node has few actual edges).
+  - Best for **dense** graphs (many edges relative to vertices).
+- **Adjacency List**: each vertex stores a list of its neighbors.
+  - Space: O(V + E). Edge lookup: O(degree of vertex) (not O(1)). Iterating all edges of a node: O(degree of vertex) — efficient.
+  - Best for **sparse** graphs (fewer edges relative to vertices) — the far more common choice in practice/interviews.
+
+**Interview trap:** *"When would you use an adjacency matrix over a list?"* When the graph is dense (E close to V²), when you need O(1) edge-existence checks frequently, or when V is small enough that O(V²) space isn't a concern — otherwise, adjacency lists are the default, more memory-efficient choice for sparse real-world graphs.
+
+## Union-Find (Disjoint Set Union, DSU)
+
+A data structure that tracks a partition of elements into disjoint (non-overlapping) sets, supporting two operations efficiently:
+- **Find(x)**: which set does `x` belong to (returns a representative/"root" of that set)?
+- **Union(x, y)**: merge the sets containing `x` and `y`.
+
+**Optimizations (both commonly asked to name, and together achieve near-O(1) amortized operations):**
+- **Union by Rank/Size**: always attach the smaller/shorter tree under the root of the larger/taller one, keeping trees shallow.
+- **Path Compression**: during `Find`, make every node on the path point directly to the root, flattening the structure for future queries.
+
+With both optimizations: amortized time complexity per operation is **O(α(n))**, where α is the inverse Ackermann function — grows so slowly it's effectively constant (≤5) for any practical input size, commonly just stated as "**nearly O(1)**."
+
+**Common uses (frequently tested):**
+- **Cycle detection in an undirected graph**: if `Find(u) == Find(v)` before adding edge `(u,v)`, adding it would create a cycle.
+- **Kruskal's MST algorithm** (Section 3) — uses Union-Find to detect and avoid cycles while greedily adding edges.
+- **Counting connected components**: number of distinct roots after processing all edges.
+- **"Number of provinces/islands" style problems**: grouping connected entities.
+
+---
+
+# 3. Algorithms
+
+## Binary Search
+
+Repeatedly halves the search space on a **sorted** array to find a target in **O(log n)**.
+
+```python
+def binary_search(arr, target):
+    lo, hi = 0, len(arr) - 1
+    while lo <= hi:
+        mid = lo + (hi - lo) // 2   # avoids potential integer overflow vs (lo+hi)//2
+        if arr[mid] == target: return mid
+        elif arr[mid] < target: lo = mid + 1
+        else: hi = mid - 1
+    return -1
+```
+
+**Interview trap:** *"Why `lo + (hi - lo) // 2` instead of `(lo + hi) // 2`?"* In languages with fixed-width integers (Java, C++), `lo + hi` could overflow if both are large; the alternate formula avoids this. Worth mentioning even in Python (where it doesn't matter due to arbitrary-precision ints) to show awareness.
+
+**Binary search on the "answer" (a very commonly tested advanced pattern):** Binary search isn't only for finding a value in a sorted array — it can be applied whenever a problem has a **monotonic predicate** (a "yes/no" condition that flips exactly once as some parameter increases), e.g., "minimum capacity to ship packages within D days," "find the square root," "minimum time to complete tasks." You binary search over the *range of possible answers*, checking feasibility at each midpoint.
+
+## Sorting
+
+| Algorithm | Time (Avg) | Time (Worst) | Space | Stable? |
+|---|---|---|---|---|
+| Bubble Sort | O(n²) | O(n²) | O(1) | Yes |
+| Selection Sort | O(n²) | O(n²) | O(1) | No |
+| Insertion Sort | O(n²) | O(n²) | O(1) | Yes |
+| Merge Sort | O(n log n) | O(n log n) | O(n) | Yes |
+| Quick Sort | O(n log n) | O(n²) | O(log n) | No |
+| Heap Sort | O(n log n) | O(n log n) | O(1) | No |
+
+**Stability** (commonly asked to define): a stable sort preserves the relative order of equal elements. Matters when sorting complex objects by one key while wanting ties broken by original order (e.g., stable-sorting a list of people by age preserves their original name-order among people with the same age).
+
+**Merge Sort (know the mechanics — very common to implement from scratch):** Divide-and-conquer — recursively split the array in half, sort each half, then merge the two sorted halves in O(n). Always O(n log n), predictable — the standard choice when worst-case guarantees matter, or for sorting linked lists (no random access needed) or **external sorting** (data too large for memory).
+
+**Quick Sort (know the mechanics):** Pick a pivot, partition the array so elements less than the pivot are on one side and greater on the other, then recursively sort each side. Average O(n log n), but **worst case O(n²)** if the pivot choice consistently produces unbalanced partitions (e.g., always picking the first element as pivot on an already-sorted array). Mitigated with **randomized pivot selection** or **median-of-three** pivot choice. Generally faster in practice than merge sort due to better cache locality and lower constant factors, despite the same average complexity — a commonly asked nuance.
+
+**When to use which (frequently asked):** Merge sort for guaranteed O(n log n) and stability (or linked lists); quick sort for average-case speed with in-place sorting (O(log n) space vs merge sort's O(n)); heap sort when O(1) extra space is critical and you can tolerate no stability guarantee.
+
+## Sliding Window
+
+A technique for problems involving contiguous subarrays/substrings, maintaining a "window" (range of indices) that expands/contracts, avoiding the O(n²) or worse cost of re-examining overlapping subarrays from scratch.
+
+**Fixed-size window example:** "Max sum of any subarray of size k."
+```python
+def max_sum_subarray(arr, k):
+    window_sum = sum(arr[:k])
+    max_sum = window_sum
+    for i in range(k, len(arr)):
+        window_sum += arr[i] - arr[i-k]  # slide: add new element, remove leftmost
+        max_sum = max(max_sum, window_sum)
+    return max_sum
+```
+
+**Variable-size window example:** "Smallest subarray with sum ≥ target" — expand the right pointer to grow the window until the condition is met, then shrink from the left while the condition still holds, tracking the minimum window size seen. Turns an O(n²) brute force into **O(n)** since each pointer moves forward at most n times total.
+
+**Recognize this pattern when:** the problem mentions "contiguous subarray/substring," "longest/shortest/max/min window satisfying some condition."
+
+## Two Pointers
+
+Using two indices that traverse a data structure (often from both ends inward, or both moving forward at different speeds) to avoid nested loops.
+
+**Classic examples:**
+- **Two Sum on a sorted array**: pointers starting at both ends, moving inward based on whether the current sum is too high or low — O(n) instead of O(n²).
+- **Reverse an array in place**: swap elements from both ends moving toward the center.
+- **Remove duplicates from a sorted array in place**: a slow pointer tracks the position to write the next unique element, a fast pointer scans ahead.
+- **Container With Most Water**: classic interview problem solved by starting pointers at both ends and moving the pointer at the shorter line inward (since moving the taller one can never improve the area).
+
+**Two Pointers vs Sliding Window (worth being able to distinguish):** Sliding window specifically deals with **contiguous ranges** and tracking some running aggregate as the window changes; two pointers is a broader technique (pointers might not define a "window" at all, e.g., converging from opposite ends). Sliding window is really a specific application/subset of the two-pointer technique.
+
+## Prefix Sum
+
+Precompute cumulative sums so that any range-sum query can be answered in O(1) after O(n) preprocessing.
+
+```python
+# prefix[i] = sum of arr[0..i-1]
+prefix = [0] * (len(arr) + 1)
+for i in range(len(arr)):
+    prefix[i+1] = prefix[i] + arr[i]
+
+# sum of arr[i..j] inclusive = prefix[j+1] - prefix[i]
+```
+
+**Common uses:** range sum queries (static array, no updates — if updates are needed, use a Fenwick/Segment Tree instead, per Section 2); "subarray sum equals k" style problems (combine prefix sums with a hash map tracking seen prefix-sum values, turning an O(n²) brute force into O(n)); 2D prefix sums for matrix range-sum queries.
+
+## DFS (Depth-First Search)
+
+Explores as far as possible along each branch before backtracking. Implemented recursively (using the call stack) or iteratively (using an explicit stack).
+
+```python
+def dfs(graph, node, visited):
+    if node in visited: return
+    visited.add(node)
+    for neighbor in graph[node]:
+        dfs(graph, neighbor, visited)
+```
+**Time:** O(V + E) for a graph (visits every vertex and edge once). **Space:** O(V) for the visited set + recursion stack (worst case O(V) for a skewed/linear graph).
+
+**Common uses:** detecting cycles, connected components, topological sort (see below), solving mazes/puzzles, tree/graph traversal, backtracking problems (Section 3 below builds directly on DFS).
+
+## BFS (Breadth-First Search)
+
+Explores all neighbors at the current depth before moving to nodes at the next depth level. Implemented with an explicit **queue**.
+
+```python
+from collections import deque
+def bfs(graph, start):
+    visited = {start}
+    queue = deque([start])
+    while queue:
+        node = queue.popleft()
+        for neighbor in graph[node]:
+            if neighbor not in visited:
+                visited.add(neighbor)
+                queue.append(neighbor)
+```
+**Time:** O(V + E). **Space:** O(V) for the queue in the worst case (e.g., a wide graph/level).
+
+**DFS vs BFS (extremely common interview question):**
+| | DFS | BFS |
+|---|---|---|
+| Data structure | Stack (or recursion) | Queue |
+| Explores | Deep first, then backtracks | Level by level, wide first |
+| Finds shortest path (unweighted graph)? | No (not guaranteed) | **Yes** — guarantees shortest path in an unweighted graph, since it explores in increasing distance order |
+| Memory | Can be more efficient for deep, narrow graphs | Can use more memory for wide graphs (large frontier) |
+| Common use | Cycle detection, topological sort, exhaustive search/backtracking | Shortest path (unweighted), level-order traversal, "minimum steps" problems |
+
+**Interview trap:** *"Which one would you use to find the shortest path?"* BFS — but **only for unweighted graphs**. For weighted graphs, you need Dijkstra's algorithm (see Shortest Path below), since BFS's level-by-level guarantee only corresponds to "fewest edges," not "minimum total weight."
+
+## Topological Sort
+
+Produces a linear ordering of vertices in a **Directed Acyclic Graph (DAG)** such that for every directed edge `u → v`, `u` comes before `v` in the ordering. Only possible if the graph has **no cycles**.
+
+**Two standard approaches (both commonly asked to know):**
+- **Kahn's Algorithm (BFS-based)**: repeatedly remove nodes with in-degree 0 (no incoming edges), adding them to the result and decrementing their neighbors' in-degrees; if the result doesn't include all nodes at the end, a cycle exists.
+- **DFS-based**: perform DFS, and prepend each node to the result **after** all its descendants have been fully explored (post-order) — reversing this post-order gives a valid topological order.
+
+**Common uses:** build/dependency systems (compiling files in dependency order, npm/pip package install order), course prerequisite scheduling (a classic LeetCode-style problem), task scheduling with dependencies.
+
+## Shortest Path
+
+- **BFS**: unweighted graphs, O(V + E) — as discussed above.
+- **Dijkstra's Algorithm**: weighted graphs with **non-negative** edge weights only. Uses a min-heap (priority queue) to always expand the currently-closest unvisited node next. Time: **O((V + E) log V)** with a binary heap.
+- **Bellman-Ford Algorithm**: weighted graphs, **handles negative edge weights** (unlike Dijkstra) and can **detect negative cycles** (a cycle whose total weight is negative, making "shortest path" undefined/unbounded). Time: **O(V × E)** — slower than Dijkstra, used specifically when negative weights are possible.
+- **Floyd-Warshall Algorithm**: computes shortest paths between **all pairs** of vertices (not just from one source), using dynamic programming. Time: **O(V³)** — suitable for dense graphs with a relatively small number of vertices.
+
+**Interview trap:** *"Why can't Dijkstra handle negative weights?"* Dijkstra's greedy approach assumes that once a node is "finalized" (shortest distance determined), no future path could ever improve it — but a negative edge encountered later could retroactively create a shorter path to an already-finalized node, violating that greedy assumption and producing incorrect results.
+
+## MST (Minimum Spanning Tree)
+
+A subset of edges connecting all vertices in a weighted, undirected, connected graph, with **no cycles** and **minimum total edge weight**.
+
+- **Kruskal's Algorithm**: sort all edges by weight ascending; greedily add each edge if it doesn't form a cycle (checked efficiently via **Union-Find**, Section 2). Time: **O(E log E)** (dominated by the sort).
+- **Prim's Algorithm**: start from an arbitrary node, repeatedly add the cheapest edge that connects a new vertex to the growing MST (similar structure to Dijkstra, using a min-heap). Time: **O(E log V)** with a binary heap.
+
+**Kruskal vs Prim (commonly asked to compare):** Kruskal is typically preferred for **sparse** graphs (edge-focused, sorts edges); Prim is typically preferred for **dense** graphs (vertex-focused, similar to Dijkstra's structure). Both always produce a valid MST (assuming the graph is connected); which is faster in practice depends on the graph's density.
+
+## Dynamic Programming
+
+Solves problems by breaking them into overlapping subproblems, solving each **once**, and storing/reusing results — avoiding redundant recomputation inherent in naive recursion. Applicable when a problem has:
+1. **Optimal substructure**: the optimal solution can be built from optimal solutions to subproblems.
+2. **Overlapping subproblems**: the same subproblems recur multiple times during naive recursion.
+
+**Two implementation approaches (know both, commonly asked to convert between them):**
+- **Top-down (Memoization)**: write the natural recursive solution, but cache results (e.g., in a hash map/array) so repeated calls with the same arguments return instantly instead of recomputing.
+- **Bottom-up (Tabulation)**: build up a table of results iteratively from the smallest subproblems to the final answer, avoiding recursion overhead entirely.
+
+```python
+# Fibonacci — the canonical teaching example
+# Naive recursive: O(2^n) — massive redundant recomputation
+
+# Top-down (memoized): O(n)
+def fib_memo(n, memo={}):
+    if n <= 1: return n
+    if n not in memo:
+        memo[n] = fib_memo(n-1, memo) + fib_memo(n-2, memo)
+    return memo[n]
+
+# Bottom-up (tabulated): O(n) time, O(1) space (only need the last 2 values)
+def fib_tab(n):
+    if n <= 1: return n
+    prev2, prev1 = 0, 1
+    for _ in range(2, n+1):
+        prev2, prev1 = prev1, prev2 + prev1
+    return prev1
+```
+
+**Classic DP problem categories (worth recognizing the "shape" of each — extremely common in interviews):**
+- **1D DP**: climbing stairs, house robber, longest increasing subsequence.
+- **2D DP (grid-based)**: unique paths, minimum path sum, edit distance, longest common subsequence.
+- **Knapsack-style**: 0/1 knapsack, subset sum, coin change (partition problems with a "capacity" constraint).
+- **String DP**: edit distance, longest palindromic substring, word break.
+- **Interval DP**: matrix chain multiplication, burst balloons (deciding optimal order of operations over a range).
+
+**Top-down vs Bottom-up trade-offs (commonly asked):** Top-down is often more intuitive to derive from the natural recursive definition, and only computes subproblems actually needed (can save work if not all subproblems are reachable). Bottom-up avoids recursion/call-stack overhead entirely (no risk of stack overflow on deep recursion) and can sometimes be optimized to use less memory (e.g., the Fibonacci example above reduces O(n) space to O(1) by only keeping the last two values, a technique called "rolling array"/space optimization that's much easier to see and apply in the bottom-up form).
+
+## Greedy
+
+Builds up a solution by always making the **locally optimal choice** at each step, hoping (and, for a subset of problems, provably guaranteed) this leads to a globally optimal solution — without reconsidering past choices (no backtracking, unlike DP which considers all subproblem possibilities).
+
+**When greedy works (the key theoretical requirement, worth stating in interviews):** The problem must exhibit the **greedy-choice property** — a locally optimal choice at each step leads to a globally optimal solution — which must typically be proven (via an exchange argument or similar), not just assumed. Greedy is not always correct; some problems that look "greedy-friendly" actually require DP (e.g., 0/1 Knapsack requires DP; the *fractional* Knapsack variant, however, is correctly solved by greedy).
+
+**Classic greedy problems (know the pattern):**
+- **Activity Selection**: given intervals, select the maximum number of non-overlapping intervals — greedily pick the interval that finishes earliest each time.
+- **Fractional Knapsack**: greedily take items with the highest value-to-weight ratio first (works because items are divisible — this is exactly why it differs from 0/1 Knapsack, which needs DP).
+- **Huffman Coding**: build an optimal prefix-free encoding by repeatedly merging the two lowest-frequency nodes (uses a min-heap).
+- **Dijkstra's Algorithm** (Section 3 above) is itself a greedy algorithm (always expand the closest unvisited node).
+
+**Greedy vs DP (extremely commonly asked distinction):** Greedy makes one irrevocable choice per step based on local information, never looking back — O(n) or O(n log n) typically, very efficient when applicable. DP considers/compares multiple possible choices at each step by exploring (and caching) subproblem results, guaranteeing a correct global optimum for a broader class of problems, but at higher time/space cost. Rule of thumb: try greedy first (simpler); if you can't prove/convince yourself the greedy-choice property holds (or find a counterexample), fall back to DP.
+
+## Backtracking
+
+A refinement of DFS/brute-force search that builds candidates incrementally and **abandons ("backtracks" from) a candidate as soon as it's determined that candidate cannot lead to a valid solution** — pruning large portions of the search space rather than exploring them fully.
+
+```python
+def backtrack(path, choices):
+    if is_solution(path):
+        result.append(path[:])
+        return
+    for choice in choices:
+        if not is_valid(path, choice):
+            continue  # prune invalid branches early
+        path.append(choice)
+        backtrack(path, remaining_choices(choices, choice))
+        path.pop()  # undo the choice — the "backtrack" step
+```
+
+**Classic backtracking problems (know the pattern — extremely common):**
+- **N-Queens**: place N queens on an N×N board with no two attacking each other — backtrack by placing queens row by row, pruning any placement that conflicts with previously placed queens.
+- **Generate all permutations / combinations / subsets**: build up candidates, exploring and undoing choices.
+- **Sudoku Solver**: try each valid digit in each empty cell, backtrack on conflicts.
+- **Word Search** (in a grid): DFS + backtracking, marking visited cells and unmarking them ("un-visiting") after exploring a dead end.
+
+**Backtracking vs plain DFS (worth articulating):** Backtracking is essentially DFS with **explicit pruning and undoing of choices** — the "undo" step (removing the last choice before trying the next branch) is the defining characteristic, letting the same partial-state variables be reused across branches rather than copying state for every recursive call.
+
+## Bit Manipulation
+
+Operating directly on the binary representation of numbers — often the key to O(1)-per-operation tricks and reduced memory usage.
+
+**Core operators (know these fluently):** `&` (AND), `|` (OR), `^` (XOR), `~` (NOT), `<<` (left shift, multiply by 2 per shift), `>>` (right shift, divide by 2 per shift).
+
+**Common tricks (frequently tested):**
+- **Check if a number is even/odd**: `n & 1` (0 = even, 1 = odd) — faster than `n % 2`.
+- **Check if a number is a power of 2**: `n > 0 and (n & (n - 1)) == 0` — a power of 2 has exactly one bit set; subtracting 1 flips all bits after (and including) the lowest set bit, so ANDing with the original yields 0 only for powers of 2.
+- **Get/Set/Clear/Toggle the i-th bit**: `n & (1 << i)` (get), `n | (1 << i)` (set), `n & ~(1 << i)` (clear), `n ^ (1 << i)` (toggle).
+- **Count set bits (Hamming weight)**: `n & (n-1)` repeatedly clears the lowest set bit — loop until n is 0, counting iterations; or use built-in `popcount`/`bin(n).count('1')`.
+- **XOR swap / find the single non-duplicate number**: XOR-ing all elements in an array where every number appears twice except one cancels out all pairs (`x ^ x = 0`), leaving just the unique number — classic O(n) time, O(1) space trick that beats a hash-set approach on space.
+- **Using a bitmask to represent a subset/state**: common in DP problems over subsets (e.g., "Traveling Salesman" DP, or tracking which items have been used) — represent a set of up to ~20-ish elements as bits in an integer, letting you use that integer directly as a DP state/array index.
+
+**Interview trap:** *"Why would you use XOR instead of a hash set to find the single unique number in an array where every other number appears twice?"* XOR gives **O(1) extra space** (just one accumulator variable) versus a hash set's O(n) space — a classic space-optimization trick interviewers specifically probe for after a candidate produces the "obvious" hash-set solution first.
+
+---
+
+# 4. Complexity Cheat Sheet
+
+| Structure/Algorithm | Access | Search | Insert | Delete |
+|---|---|---|---|---|
+| Array | O(1) | O(n) | O(n) | O(n) |
+| Dynamic Array (amortized) | O(1) | O(n) | O(1)* | O(n) |
+| Linked List | O(n) | O(n) | O(1)** | O(1)** |
+| Hash Map | — | O(1) avg | O(1) avg | O(1) avg |
+| BST (balanced) | O(log n) | O(log n) | O(log n) | O(log n) |
+| Heap | O(1) (peek only) | O(n) | O(log n) | O(log n) (extract) |
+| Trie | — | O(m) | O(m) | O(m) |
+
+*At the end. **Given a reference to the node/position.
+
+| Algorithm | Time | Space |
+|---|---|---|
+| Binary Search | O(log n) | O(1) |
+| Merge Sort | O(n log n) | O(n) |
+| Quick Sort (avg) | O(n log n) | O(log n) |
+| DFS / BFS | O(V + E) | O(V) |
+| Dijkstra (binary heap) | O((V+E) log V) | O(V) |
+| Bellman-Ford | O(V × E) | O(V) |
+| Floyd-Warshall | O(V³) | O(V²) |
+| Kruskal's MST | O(E log E) | O(V) |
+| Prim's MST | O(E log V) | O(V) |
+
+---
+
+# 5. Pattern Recognition Guide
+
+Mapping problem phrasing to the likely technique — useful for quickly orienting during a live interview.
+
+| Problem mentions... | Likely technique |
+|---|---|
+| "sorted array," "find target," "minimum X satisfying condition" | Binary Search (possibly "on the answer") |
+| "contiguous subarray/substring," "longest/shortest window" | Sliding Window |
+| "pair/triplet sum," sorted array, converging | Two Pointers |
+| "range sum query," static array | Prefix Sum |
+| "range sum/min/max query" + updates | Segment Tree / Fenwick Tree |
+| "shortest path," unweighted graph | BFS |
+| "shortest path," weighted, non-negative | Dijkstra |
+| "shortest path," negative weights possible | Bellman-Ford |
+| "all pairs shortest path" | Floyd-Warshall |
+| "connect all nodes," "minimum cost to connect" | MST (Kruskal/Prim) |
+| "dependency order," "course prerequisites," "build order" | Topological Sort |
+| "connected components," "cycle detection" (undirected) | Union-Find or DFS |
+| "count ways," "min/max cost," overlapping subproblems | Dynamic Programming |
+| "maximize/minimize with local choices," provably optimal locally | Greedy |
+| "all permutations/combinations/subsets," "N-Queens," "Sudoku" | Backtracking |
+| "prefix," "autocomplete," "word search with prefixes" | Trie |
+| "top K," "kth largest/smallest," "median of stream" | Heap |
+| "single number," "subset representation," "XOR" | Bit Manipulation |
+
+---
+
+# 6. Rapid-Fire Interview Q&A
+
+**Q: What's the difference between Big-O and amortized complexity?**
+Big-O describes worst-case (or, loosely, typical) per-operation cost; amortized complexity averages cost across a sequence of operations, accounting for occasional expensive operations that are offset by many cheap ones (e.g., dynamic array resizing).
+
+**Q: When would you choose a linked list over an array?**
+When frequent insertions/deletions at arbitrary positions are needed (given a node reference) and random access isn't required — arrays are almost always preferred otherwise due to cache locality and O(1) access.
+
+**Q: Why is building a heap from an array O(n), not O(n log n)?**
+Because most nodes are near the bottom of the tree (where sift-down operations are cheap/short), and only a few nodes are near the root (where sift-down is expensive/long) — the total work sums to O(n), not the naively-expected O(n log n) from n insertions. A frequently misunderstood but commonly asked detail.
+
+**Q: DFS vs BFS for finding the shortest path?**
+BFS guarantees shortest path in an **unweighted** graph (explores by increasing distance level-by-level). DFS gives no such guarantee.
+
+**Q: Kruskal's vs Prim's for MST — when would you pick one over the other?**
+Kruskal's for sparse graphs (sorts edges, uses Union-Find); Prim's for dense graphs (grows the tree from a starting vertex, similar structure to Dijkstra).
+
+**Q: Why can't Dijkstra's algorithm handle negative edge weights?**
+Its greedy assumption — that once a node's shortest distance is finalized, it can never be improved — breaks if a later negative edge could retroactively shorten a path to an already-finalized node.
+
+**Q: When does greedy fail where DP succeeds?**
+When the locally optimal choice at each step doesn't guarantee global optimality — e.g., 0/1 Knapsack (items can't be split) requires DP, whereas Fractional Knapsack (items divisible) can be solved correctly with greedy.
+
+**Q: What's the key difference between backtracking and plain brute-force recursion?**
+Backtracking explicitly prunes invalid branches early (checking validity before recursing further) and explicitly undoes ("backtracks") a choice before trying the next one, avoiding exploring the entire unconstrained search space that naive brute force would.
+
+**Q: Segment Tree vs Fenwick Tree — when would you choose each?**
+Fenwick Tree for simpler cases needing just prefix sums with point updates (less code, less memory). Segment Tree for more general range operations (min/max/GCD, not just sums) or when you need range updates with lazy propagation.
+
+**Q: Why use Union-Find instead of DFS for cycle detection in Kruskal's algorithm?**
+Union-Find's near-O(1) amortized `Find`/`Union` operations are more efficient within Kruskal's edge-by-edge loop than re-running a full DFS/BFS reachability check after every edge addition, which would be far more expensive overall.
+
+---
+
+## Suggested Study Approach
+1. Master the "Big Five" patterns first — Two Pointers/Sliding Window, Binary Search, DFS/BFS, Dynamic Programming, and Heaps — since they cover the large majority of medium-difficulty interview questions.
+2. Practice converting a naive recursive solution into a memoized (top-down DP) solution, then into a tabulated (bottom-up) one — interviewers often ask you to progressively optimize.
+3. For every problem you solve, explicitly state time AND space complexity out loud, and mention the brute-force approach first before optimizing — this mirrors real interview expectations even when practicing solo.
+4. Use the Pattern Recognition Guide (Section 5) actively during practice: before coding, force yourself to name which pattern(s) a new problem resembles.
+5. Follow the roadmap's suggestion of practicing 250-400 problems, weighted toward the "Big Five" patterns above, with deliberate additional reps on DP (the single most commonly under-practiced, highest-difficulty-spike category) and graph algorithms (BFS/DFS/Union-Find/Dijkstra/Topological Sort) since these recur constantly in both pure DSA rounds and system-design-adjacent coding questions.
