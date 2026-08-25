@@ -1,6 +1,7 @@
 import "./global.css";
 import type { ReactNode } from "react";
 import { RootProvider } from "fumadocs-ui/provider";
+import { Analytics } from "@vercel/analytics/next";
 
 export const metadata = {
   title: {
@@ -18,6 +19,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         {/* RootProvider wires up theming (light/dark), search dialog state,
             and other Fumadocs UI context used by every page below. */}
         <RootProvider>{children}</RootProvider>
+        <Analytics />
       </body>
     </html>
   );
