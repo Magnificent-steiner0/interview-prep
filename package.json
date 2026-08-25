@@ -12,6 +12,7 @@
     "migrate-content": "node scripts/migrate-content.mjs"
   },
   "dependencies": {
+    "@vercel/analytics": "^2.0.1",
     "fumadocs-core": "^14.5.1",
     "fumadocs-mdx": "^11.2.0",
     "fumadocs-ui": "^14.5.1",
