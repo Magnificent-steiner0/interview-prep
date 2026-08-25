@@ -26,7 +26,7 @@ export const categories: Category[] = [
     description: "FastAPI, Next.js, TypeScript, React, and Flutter.",
   },
   {
-    slug: "machine-learing",
+    slug: "machine-learning",
     title: "Machine Learning",
     description:
       "Math & Statistics foundations, Supervised Learning: Regression & Linear Models.",
