@@ -9,7 +9,7 @@ export const metadata = {
     template: "%s | Interview Prep Library",
   },
   description:
-    "A structured, in-depth interview preparation library covering CS fundamentals, languages, web frameworks, and AI engineering.",
+    "A structured, in-depth interview preparation library covering CS fundamentals, languages, web frameworks, machine learning and AI engineering.",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
