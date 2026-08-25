@@ -1,0 +1,336 @@
+# Math & Statistics Foundations — ML Interview Preparation Guide
+
+Covers the mathematical toolkit underlying nearly every ML algorithm: linear algebra essentials, probability, Bayes' theorem, statistical inference (hypothesis testing, p-values, confidence intervals), and the calculus/optimization concepts (MLE/MAP, gradients) that later guides in this series (regression, deep learning) build directly on.
+
+---
+
+## Table of Contents
+1. [Why This Foundation Matters](#1-why-this-foundation-matters)
+2. [Vectors, Matrices & Linear Algebra Essentials](#2-vectors-matrices--linear-algebra-essentials)
+3. [Eigenvalues & Eigenvectors](#3-eigenvalues--eigenvectors)
+4. [Probability Fundamentals](#4-probability-fundamentals)
+5. [Common Probability Distributions](#5-common-probability-distributions)
+6. [Bayes' Theorem](#6-bayes-theorem)
+7. [Expectation, Variance & Covariance](#7-expectation-variance--covariance)
+8. [The Central Limit Theorem](#8-the-central-limit-theorem)
+9. [Hypothesis Testing](#9-hypothesis-testing)
+10. [P-values: What They Actually Mean](#10-p-values-what-they-actually-mean)
+11. [Confidence Intervals](#11-confidence-intervals)
+12. [Correlation vs Causation](#12-correlation-vs-causation)
+13. [Maximum Likelihood Estimation (MLE)](#13-maximum-likelihood-estimation-mle)
+14. [Maximum A Posteriori (MAP) & the Bridge to Regularization](#14-maximum-a-posteriori-map--the-bridge-to-regularization)
+15. [Gradients & Optimization Basics](#15-gradients--optimization-basics)
+16. [Convexity](#16-convexity)
+17. [Rapid-Fire Interview Q&A](#17-rapid-fire-interview-qa)
+
+---
+
+## 1. Why This Foundation Matters
+
+**The core framing (commonly asked implicitly, worth stating explicitly at the start of an interview if the conversation opens with a math question):** Nearly every ML algorithm covered in the rest of this series is, underneath its specific name, a combination of **(1) a probabilistic assumption about how the data was generated**, **(2) an objective function derived from that assumption**, and **(3) an optimization procedure to fit parameters that minimize/maximize that objective**. Linear regression is MLE under a Gaussian-noise assumption (Section 13); logistic regression is MLE under a Bernoulli assumption; L2 regularization is literally MAP estimation with a Gaussian prior (Section 14); gradient descent (Section 15) is how nearly every model in this series is actually fit. Interviewers probe this foundational layer specifically because a candidate who can derive *why* an algorithm's loss function looks the way it does (rather than having merely memorized the formula) can reason about **novel** situations — a new loss function, a new regularizer, a weird failure mode — rather than pattern-matching to a memorized case.
+
+---
+
+## 2. Vectors, Matrices & Linear Algebra Essentials
+
+**Why linear algebra is the actual "data structure" of ML (commonly asked to articulate)**: A dataset with `n` examples and `d` features is represented as an `n × d` matrix `X`; a model's learnable parameters are a vector `w` (or a collection of matrices, for a neural network); a prediction is typically some transformation like `Xw`. Understanding matrix operations isn't academic decoration — it's the literal language the rest of this series' algorithms are expressed in.
+
+**Dot product (inner product) — the single most-used operation**:
+```
+a · b = Σ aᵢbᵢ = ||a|| ||b|| cos(θ)
+```
+Geometrically measures how much two vectors point in the same direction — a linear model's prediction `w · x` is literally a weighted sum, computed as a dot product between the learned weight vector and the feature vector. **Interview trap**: *"What does it mean if two vectors' dot product is zero?"* They're **orthogonal** (perpendicular, `θ = 90°`) — a commonly tested geometric fact directly relevant to understanding PCA (Section on dimensionality reduction, covered in a later guide) where principal components are constructed to be mutually orthogonal.
+
+**Matrix multiplication as a composition of linear transformations**: `(AB)x = A(Bx)` — applying `B` then `A` is the same as applying the single combined matrix `AB` — the conceptual basis for why stacking neural network layers (each a matrix multiply) composes into a more expressive overall function (expanded fully in the Neural Networks guide).
+
+**Matrix transpose (`Aᵀ`)**: Flips rows and columns — commonly shows up in the **normal equation** for linear regression (`w = (XᵀX)⁻¹Xᵀy`, covered in depth in the Regression guide) and in computing gradients of matrix expressions.
+
+**Matrix inverse (`A⁻¹`)**: The matrix such that `AA⁻¹ = I` (the identity matrix) — only exists for **square, non-singular** matrices. **Interview trap**: *"When does `(XᵀX)⁻¹` fail to exist in linear regression, and what does that signify practically?"* When `XᵀX` is **singular** (non-invertible) — this happens when features are **perfectly collinear** (one feature is an exact linear combination of others, or there are more features than examples) — practically, this is exactly why regularization (Section 14) or dimensionality reduction becomes necessary rather than optional in high-dimensional or collinear settings.
+
+**Norms (commonly asked to distinguish, since L1 vs. L2 regularization depends entirely on this distinction)**:
+```
+L1 norm (Manhattan):  ||v||₁ = Σ|vᵢ|
+L2 norm (Euclidean):  ||v||₂ = √(Σvᵢ²)
+```
+**Interview trap**: *"Why does L1 regularization tend to produce sparse solutions (many exactly-zero weights) while L2 doesn't?"* Geometrically, the L1 norm's constraint region is a **diamond** (with sharp corners **on the axes**), while the L2 norm's is a **circle** (smooth, no corners) — when the loss function's contours are overlaid against these constraint shapes, the optimal solution is far more likely to land exactly on one of L1's sharp corners (where one or more coordinates are exactly zero) than anywhere on L2's smooth boundary — this geometric argument is a very commonly requested "explain it visually" interview answer, and directly underlies why Lasso (L1) performs implicit feature selection while Ridge (L2) merely shrinks weights toward zero without eliminating them.
+
+---
+
+## 3. Eigenvalues & Eigenvectors
+
+**Definition (commonly asked to state precisely)**: For a square matrix `A`, a vector `v` is an **eigenvector** with **eigenvalue** `λ` if:
+```
+Av = λv
+```
+Multiplying `A` by `v` doesn't rotate `v` at all — it only **scales** it by the factor `λ`. Geometrically, eigenvectors are the special directions a linear transformation only stretches/compresses (never rotates away from).
+
+**Why this matters for ML specifically (the single most commonly asked practical connection)**: **PCA (Principal Component Analysis)** — a foundational dimensionality-reduction technique covered in depth in a later guide — works by computing the eigenvectors of a dataset's **covariance matrix** (Section 7). The eigenvector with the **largest eigenvalue** points in the direction of **maximum variance** in the data — this is exactly the first principal component. Eigenvalues directly quantify **how much variance** is captured along each corresponding eigenvector direction, which is precisely how PCA decides which dimensions to keep and which to discard.
+
+**Interview trap**: *"If a covariance matrix's largest eigenvalue is much bigger than the rest, what does that tell you about the data?"* The data has one **dominant direction of variation** — most of the dataset's spread can be explained by a single combined feature direction, meaning the data can likely be compressed to far fewer dimensions with minimal information loss — precisely the signal PCA's "explained variance ratio" is built on.
+
+---
+
+## 4. Probability Fundamentals
+
+**Random variables**: A variable whose value is the outcome of a random phenomenon — **discrete** (countable outcomes, e.g., a coin flip) or **continuous** (uncountably many possible values within a range, e.g., a person's height).
+
+**PMF vs PDF (a commonly asked, precise distinction)**: A **Probability Mass Function** (discrete variables) gives `P(X = x)` directly — an actual probability. A **Probability Density Function** (continuous variables) does **not** give a probability directly at a single point (a continuous variable has zero probability of landing on any exact value) — instead, probability is the **area under the PDF curve** over an interval: `P(a ≤ X ≤ b) = ∫ₐᵇ f(x)dx`. **Interview trap**: *"Can a PDF's value at a point exceed 1?"* Yes — unlike a PMF (bounded by 1, since it's a direct probability), a PDF is a **density**, not a probability, and can take any non-negative value as long as the **total area** under the curve integrates to 1.
+
+**Joint, marginal, and conditional probability (commonly asked to distinguish precisely)**:
+```
+Joint:       P(A, B) — probability of both A and B occurring
+Marginal:    P(A) = Σ_b P(A, B=b) — "summing out" B to get A's probability alone
+Conditional: P(A | B) = P(A, B) / P(B) — probability of A GIVEN that B occurred
+```
+
+**Independence**: Events `A` and `B` are independent if `P(A, B) = P(A)P(B)`, equivalently `P(A|B) = P(A)` — knowing `B` occurred provides **no information** about `A`. A commonly tested distinction: **independence** is not the same as **mutual exclusivity** (disjoint events) — mutually exclusive events are actually **maximally dependent** (if `A` occurs, `B` definitely didn't), a frequently confused pair of concepts.
+
+---
+
+## 5. Common Probability Distributions
+
+Worth knowing these by name, shape, and — critically — **which ML scenario each one models**, since this is a very commonly asked "connect the distribution to the use case" question.
+
+| Distribution | Type | Models | ML Connection |
+|---|---|---|---|
+| **Bernoulli** | Discrete | A single binary trial (success/failure) | The likelihood function underlying logistic regression's loss (Section 13) |
+| **Binomial** | Discrete | Number of successes in `n` independent Bernoulli trials | Modeling count-of-successes scenarios (e.g., A/B test conversions) |
+| **Gaussian (Normal)** | Continuous | Symmetric, bell-shaped data clustering around a mean | The noise assumption behind ordinary least-squares regression (Section 13); the basis of the Central Limit Theorem (Section 8) |
+| **Poisson** | Discrete | Number of events in a fixed interval (rare, independent events) | Modeling count data (e.g., number of user clicks per hour) |
+| **Uniform** | Continuous/Discrete | Every outcome equally likely | Random weight initialization schemes (Deep Learning guide) |
+| **Exponential** | Continuous | Time between events in a Poisson process | Survival analysis, time-to-failure modeling |
+
+**Interview trap**: *"Why is the Gaussian distribution so central to statistics and ML, beyond just being common in nature?"* Two compounding reasons, both commonly expected in a strong answer: **(1)** the Central Limit Theorem (Section 8) guarantees that **sums/averages of many independent random variables** tend toward a Gaussian shape regardless of the underlying distribution, making it a mathematically justified default assumption in many aggregate settings; **(2)** the Gaussian has extremely convenient mathematical properties (its MLE reduces to simple mean/variance formulas, per Section 13; it's closed under linear combination) that make it analytically tractable, which is exactly why assuming Gaussian-distributed noise is what makes ordinary least-squares regression's closed-form solution possible at all.
+
+---
+
+## 6. Bayes' Theorem
+
+**The formula (commonly asked to state and derive from the definition of conditional probability, Section 4)**:
+```
+P(A | B) = P(B | A) × P(A) / P(B)
+```
+Derived directly from the conditional-probability definition: since `P(A|B) = P(A,B)/P(B)` and `P(B|A) = P(A,B)/P(A)`, rearranging the second gives `P(A,B) = P(B|A)P(A)`, which substituted into the first gives Bayes' theorem.
+
+**The ML-relevant terminology (commonly asked to name each term precisely, since this vocabulary recurs throughout the series — Naive Bayes, MAP estimation Section 14, Bayesian methods generally)**:
+```
+P(hypothesis | data) = P(data | hypothesis) × P(hypothesis) / P(data)
+      Posterior      =      Likelihood       ×    Prior      / Evidence
+```
+- **Prior**: What you believed about the hypothesis **before** seeing the data.
+- **Likelihood**: How probable the observed data is, **assuming** the hypothesis is true.
+- **Posterior**: Your **updated** belief about the hypothesis, **after** incorporating the data.
+- **Evidence** (the denominator): A normalizing constant ensuring the posterior sums/integrates to 1 — often computationally intractable directly, which is why it's frequently avoided by working with **unnormalized** posteriors (`posterior ∝ likelihood × prior`) — a commonly cited practical point.
+
+**The classic interview worked example — medical testing (extremely commonly asked, worth having the numbers ready)**: A disease affects 1% of a population. A test is 95% accurate (correctly identifies 95% of those with the disease, and correctly clears 95% of those without it). If someone tests positive, what's the probability they actually have the disease?
+```
+P(Disease) = 0.01,  P(Positive | Disease) = 0.95
+P(No Disease) = 0.99,  P(Positive | No Disease) = 0.05  (false positive rate)
+
+P(Positive) = P(Positive|Disease)P(Disease) + P(Positive|No Disease)P(No Disease)
+            = 0.95 × 0.01 + 0.05 × 0.99 = 0.0095 + 0.0495 = 0.059
+
+P(Disease | Positive) = 0.95 × 0.01 / 0.059 ≈ 0.161 (about 16%)
+```
+**Interview trap**: *"How can a 95%-accurate test only give a 16% chance of actually having the disease after a positive result?"* This is the **base rate fallacy** — because the disease is genuinely **rare** (1% prior), the **absolute number of false positives** (5% of the huge healthy population) ends up dwarfing the **true positives** (95% of the tiny diseased population) — a very commonly tested illustration of why the **prior** matters enormously, and why ignoring it (assuming a positive test result alone is highly conclusive) is a frequently cited real-world reasoning error, directly relevant to evaluating classifiers on **imbalanced datasets** (covered in depth in a later guide).
+
+---
+
+## 7. Expectation, Variance & Covariance
+
+**Expectation (expected value)**: The probability-weighted average of a random variable's possible outcomes: `E[X] = Σ x·P(X=x)` (discrete) or `∫x·f(x)dx` (continuous). **Linearity of expectation** (commonly asked, a surprisingly powerful, frequently underused property): `E[X + Y] = E[X] + E[Y]`, **always** — even if `X` and `Y` are **not independent** — a commonly tested "does this require independence" trap question, since many other properties (like variance's additivity, below) do require it.
+
+**Variance**: `Var(X) = E[(X - E[X])²] = E[X²] - (E[X])²` — measures spread around the mean. **Interview trap**: *"Does `Var(X + Y) = Var(X) + Var(Y)` always hold, the same way linearity of expectation does?"* No — this specifically **requires `X` and `Y` to be independent** (or, more precisely, uncorrelated); in general, `Var(X+Y) = Var(X) + Var(Y) + 2Cov(X,Y)` — a commonly tested distinction from the unconditional linearity of expectation above.
+
+**Covariance**: `Cov(X,Y) = E[(X-E[X])(Y-E[Y])]` — measures how two variables **vary together**: positive covariance means they tend to move in the same direction, negative means opposite directions, zero means no linear relationship. **Correlation** is covariance **normalized** to a fixed `[-1, 1]` range: `ρ = Cov(X,Y) / (σ_X σ_Y)`, making it comparable across variables with different scales (unlike raw covariance, whose magnitude depends on the variables' units).
+
+**The covariance matrix (commonly asked, directly connecting back to Section 3's PCA discussion)**: For a multi-feature dataset, the covariance matrix `Σ` is a `d × d` matrix where entry `Σᵢⱼ` is the covariance between feature `i` and feature `j` (with the diagonal holding each feature's own variance) — PCA's eigenvectors (Section 3) are computed **directly from this matrix**, which is the precise mathematical link between this section and dimensionality reduction.
+
+---
+
+## 8. The Central Limit Theorem
+
+**The statement (commonly asked to state precisely, since the exact conditions matter)**: The distribution of the **sample mean** of a sufficiently large number of **independent, identically distributed (i.i.d.)** random variables approaches a **Gaussian distribution**, **regardless of the underlying population's own distribution shape** — as long as that underlying distribution has finite variance.
+
+**Why this is one of the most practically important theorems in all of statistics (commonly asked to articulate the "so what")**: It's the theoretical justification for treating sample means as approximately normal **even when the underlying data clearly isn't** (e.g., skewed, bimodal, or otherwise non-Gaussian raw data) — this is precisely what makes **hypothesis testing and confidence intervals** (Sections 9-11) valid tools to apply broadly, since many of their standard formulas assume normality of the sampling distribution of the mean, not of the raw data itself.
+
+**Interview trap**: *"If your raw data is heavily skewed, does that invalidate a t-test comparing two group means?"* Not necessarily — the CLT means the **sampling distribution of the mean** tends toward normal as sample size grows, **even if the raw underlying data is skewed** — what matters is whether the sample size is large enough for the CLT's approximation to be reasonably accurate (a commonly cited rule of thumb is `n ≥ 30`, though this varies with how skewed the underlying distribution actually is) — a frequently tested nuance distinguishing "raw data must be normal" (false) from "the sampling distribution of the mean tends toward normal" (the actual CLT claim).
+
+---
+
+## 9. Hypothesis Testing
+
+**The core framework (commonly asked to walk through the general procedure, independent of any specific test)**:
+1. State a **null hypothesis** (`H₀`) — typically "no effect" or "no difference" (e.g., "this new website design has no effect on conversion rate").
+2. State an **alternative hypothesis** (`H₁`) — what you'd conclude if you reject `H₀` (e.g., "the new design changes conversion rate").
+3. Choose a **significance level** (`α`, commonly 0.05) — the threshold probability of incorrectly rejecting a true null hypothesis that you're willing to accept.
+4. Compute a **test statistic** from the observed data, and derive the corresponding **p-value** (Section 10).
+5. If `p-value < α`, **reject** `H₀` in favor of `H₁`; otherwise, **fail to reject** `H₀` (crucially — this is **not** the same as "accepting" `H₀` as true, a commonly tested precision point covered further in Section 10).
+
+**Type I vs Type II errors (an extremely commonly asked, precise-answer-required distinction)**:
+```
+                    H₀ is actually True         H₀ is actually False
+Reject H₀:          Type I Error (α)            Correct (true positive)
+Fail to reject H₀:  Correct (true negative)     Type II Error (β)
+```
+- **Type I error**: **False positive** — concluding there's an effect when there genuinely isn't one. Its probability is exactly `α`, the significance level you chose.
+- **Type II error**: **False negative** — failing to detect a genuinely real effect. Its probability is `β`; **statistical power** is `1 - β` — the probability of correctly detecting a real effect when one exists.
+
+**Interview trap**: *"If you lower your significance threshold α from 0.05 to 0.01 to reduce Type I errors, what happens to Type II errors?"* They **increase** — this is a fundamental trade-off, not a free improvement: making it **harder** to reject `H₀` (a stricter threshold) reduces false positives but simultaneously makes it **easier to miss real effects**, increasing false negatives — a very commonly tested "there's no free lunch" statistics question, directly parallel in spirit to the precision/recall trade-off covered in the classification-metrics guide.
+
+**Statistical power and sample size (a commonly asked, practically important connection)**: Power (`1-β`) increases with **larger sample size**, a **larger true effect size**, and a **higher chosen α** — this is precisely why "we ran an A/B test on 20 users and saw no significant difference" is weak evidence of "no real effect" — the test may simply have been **underpowered** to detect the effect at that sample size, not evidence the effect doesn't exist.
+
+---
+
+## 10. P-values: What They Actually Mean
+
+The single most commonly **misinterpreted** statistical concept in ML/data science interviews — precision here is a strong, high-value signal.
+
+**The correct, precise definition (commonly asked to state exactly)**: The p-value is the probability of observing a test statistic **at least as extreme** as the one actually observed, **assuming the null hypothesis is true**.
+```
+p-value = P(observed data or more extreme | H₀ is true)
+```
+
+**What the p-value is NOT (a commonly asked "debunk this misconception" question, worth having several ready)**:
+- **It is NOT `P(H₀ is true | data)`** — this is the single most common misinterpretation, confusing the p-value (a statement about the data's probability **given** the null) with a posterior probability about the **hypothesis itself** (which would require Bayes' theorem, Section 6, and a prior — the p-value provides neither).
+- **It is NOT the probability that the result occurred "by chance"** in some general sense — it's specifically conditioned on `H₀` being true.
+- **A small p-value does NOT imply a large or practically meaningful effect size** — with a large enough sample size, even a **trivially small** effect can produce a statistically significant (small) p-value — statistical significance and **practical significance** are genuinely different things, a very commonly tested distinction.
+- **Failing to reject `H₀` (a large p-value) does NOT prove `H₀` is true** — it only means the data didn't provide **enough evidence** to reject it; "absence of evidence is not evidence of absence" is the standard, commonly quoted framing.
+
+**Interview trap**: *"A study reports p = 0.001 for a new drug's effect. Does this mean there's a 99.9% chance the drug works?"* No — this conflates the p-value with a posterior probability, exactly the misinterpretation flagged above: p = 0.001 means "**if** the drug had no effect, we'd see data this extreme only 0.1% of the time" — it says nothing directly about the probability the drug **actually** works, which would require combining this evidence with a **prior** belief via Bayes' theorem (Section 6) — a very commonly asked, high-signal question specifically because the correct answer requires connecting Sections 6 and 10 together.
+
+---
+
+## 11. Confidence Intervals
+
+**Definition (commonly asked to state precisely, since — like p-values — the correct interpretation is frequently gotten wrong)**: A 95% confidence interval is constructed via a procedure such that, **if repeated across many independent samples**, approximately 95% of the resulting intervals would **contain the true population parameter**.
+
+**The commonly tested misinterpretation to avoid**: *"There's a 95% probability the true value falls within this specific, already-computed interval"* — this is **not** technically correct in the standard (frequentist) interpretation: the true population parameter is a **fixed** (if unknown) value, not a random variable — it's the **interval's bounds** (computed from random sample data) that vary from sample to sample; the 95% refers to the **long-run reliability of the procedure**, not a probability statement about this one specific interval containing the truth.
+
+**Confidence interval width and its practical drivers (commonly asked to name the levers)**: A confidence interval **narrows** (more precise) with **larger sample size** (more data reduces estimation uncertainty) and **widens** with a **higher confidence level** (e.g., a 99% CI is wider than a 95% CI for the same data, since capturing the truth more reliably requires a broader net) — directly connecting to Section 9's power/sample-size discussion: more data simultaneously improves statistical power **and** narrows confidence intervals, which is why sample size is such a central practical lever across nearly all of inferential statistics.
+
+**Interview trap**: *"If a 95% confidence interval for a difference in means is [-2, 5], what can you conclude about statistical significance at α=0.05?"* Since the interval **contains zero** (a "no difference" value falls within the plausible range), this is equivalent to a hypothesis test **failing to reject `H₀`** at the corresponding significance level — a commonly tested, useful equivalence: a confidence interval and a hypothesis test are two views of the **same** underlying inference, and whether an interval contains the null-hypothesis value directly tells you the hypothesis test's outcome without needing to separately compute a p-value.
+
+---
+
+## 12. Correlation vs Causation
+
+**The core, extremely commonly asked distinction**: A strong correlation between two variables does **not**, on its own, establish that one **causes** the other — a classic, foundational point, but the **specific mechanisms** by which correlation can arise without causation are the actually valuable, commonly probed follow-up content.
+
+**Named mechanisms behind spurious correlation (commonly asked to name at least one or two, beyond just "correlation isn't causation" as a slogan)**:
+- **Confounding variable**: A third, unmeasured variable independently influences **both** observed variables, creating an apparent relationship between them with no direct causal link (the classic example: ice cream sales and drowning deaths both correlate with summer heat, not with each other directly).
+- **Reverse causation**: The presumed direction of causality is actually **backwards** — e.g., observing that companies with higher revenue tend to have more employees could reflect revenue enabling more hiring, or could equally reflect an unstated assumption running the wrong direction, depending on context.
+- **Selection bias**: The sampled data isn't representative of the broader population in a way that manufactures an apparent relationship that wouldn't hold in the full population.
+- **Coincidence / multiple comparisons**: With enough variables tested against each other, some will correlate strongly purely by chance (directly connecting to Section 10 — testing many hypotheses increases the chance of a false positive somewhere, unless corrected for).
+
+**Interview trap**: *"How would you actually establish causation, if correlation alone isn't sufficient?"* The gold standard is a properly **randomized controlled experiment** (an A/B test, in the industry-practice framing) — **randomization** specifically breaks the link between the treatment and any confounding variables (since assignment to treatment/control is independent of everything else by construction), which is precisely why randomized experiments support causal claims that purely observational correlational data cannot — a commonly expected, practically important closing point for this topic in an interview.
+
+---
+
+## 13. Maximum Likelihood Estimation (MLE)
+
+One of the most foundational, most commonly asked-about concepts in this entire guide — directly explaining **why** the loss functions used throughout the rest of this ML series look the way they do, rather than being arbitrary choices.
+
+**The core idea**: Given observed data, **MLE** finds the model parameters `θ` that make the **observed data most probable** under the assumed model — formally, maximizing the **likelihood function** `L(θ) = P(data | θ)` over `θ`.
+
+**Why we maximize **log**-likelihood instead of likelihood directly (a very commonly asked practical/mathematical detail)**:
+```
+log L(θ) = log ∏ᵢ P(xᵢ | θ) = Σᵢ log P(xᵢ | θ)
+```
+Since the data points are assumed i.i.d. (Section 8), the joint likelihood is a **product** of individual probabilities — for large datasets, multiplying many small probabilities together causes severe **numerical underflow** (the product rapidly approaches zero, beyond floating-point precision). Taking the **log** converts this product into a **sum**, which is both numerically stable **and** easier to differentiate (since the log is a monotonically increasing function, maximizing `log L(θ)` gives the **same** optimal `θ` as maximizing `L(θ)` directly).
+
+**The worked connection to linear regression (extremely commonly asked — "derive why least-squares regression's loss is the sum of squared errors")**: Assume `y = wᵀx + ε`, where the noise `ε ~ N(0, σ²)` (Gaussian noise, Section 5). Under this assumption, `y | x` is itself Gaussian with mean `wᵀx`. Writing out the log-likelihood of the observed data under this Gaussian assumption and maximizing over `w`, the terms that don't depend on `w` drop out, and what remains to be **minimized** is exactly:
+```
+Σᵢ (yᵢ - wᵀxᵢ)²
+```
+— the **sum of squared errors**, precisely the loss function ordinary least-squares regression minimizes. **This is the single most important derivation in this guide to be able to reproduce**: it directly demonstrates that "minimize squared error" isn't an arbitrary convention — it's the **mathematically exact consequence** of assuming Gaussian-distributed noise, and MLE is the unifying principle connecting a probabilistic assumption to a concrete loss function.
+
+**The same pattern for logistic regression (worth knowing as the second most commonly cited MLE derivation)**: Assuming a **Bernoulli** likelihood (Section 5) for a binary outcome, maximizing the log-likelihood over the model's parameters yields exactly the **binary cross-entropy** (log) loss — the standard loss function for logistic regression and for the output layer of binary classification neural networks — the same MLE principle, just under a different distributional assumption.
+
+**Interview trap**: *"Is MLE the same thing as 'minimizing loss' in machine learning generally?"* MLE (maximizing likelihood) and loss minimization are **two sides of the same coin**, not separate concepts — since likelihood is maximized and loss is conventionally **minimized**, most ML loss functions are literally the **negative log-likelihood** of some assumed probabilistic model, as demonstrated above — understanding this connection is what lets you derive an appropriate loss function for a **novel** modeling assumption, rather than needing to memorize a fixed lookup table of "this algorithm uses this loss."
+
+---
+
+## 14. Maximum A Posteriori (MAP) & the Bridge to Regularization
+
+**The core idea (directly extending Section 6's Bayes' theorem and Section 13's MLE, commonly asked to connect all three)**: While MLE finds the `θ` maximizing `P(data | θ)` alone, **MAP** finds the `θ` maximizing the full **posterior**, `P(θ | data) ∝ P(data | θ) × P(θ)` — incorporating a **prior belief** about `θ` (Section 6's Bayes' theorem terminology) **in addition to** the likelihood of the observed data.
+
+**The genuinely important, very commonly asked payoff — MAP with a Gaussian prior IS L2 regularization**: If you place a **Gaussian prior** centered at zero on the model's weights (`θ ~ N(0, τ²)`, expressing a belief that weights are probably small/near-zero unless the data strongly indicates otherwise), taking the log of the posterior and maximizing it yields:
+```
+maximize:  log P(data | θ) + log P(θ)
+        =  [negative squared error term]  -  λ Σθᵢ²
+```
+— the second term is **exactly** the L2 (Ridge) regularization penalty from Section 2. **This is one of the most valuable derivations to have ready in an ML interview**: it reveals that L2 regularization isn't an ad hoc "add a penalty to prevent overfitting" trick — it's the **mathematically precise consequence** of adding a Gaussian prior belief that weights should be small, within the exact same MLE/Bayesian framework as Section 13. (An analogous derivation with a **Laplace prior**, instead of Gaussian, yields **L1** regularization — worth knowing this parallel exists, even without reproducing the full derivation.)
+
+**Interview trap**: *"What's the conceptual difference between MLE and MAP, in one sentence?"* MLE asks "what parameters make the data most likely?" using **only** the data; MAP asks the same question but **additionally weights** that answer by a **prior belief** about which parameter values are plausible **before** seeing any data — as the amount of data grows very large, the likelihood term increasingly **dominates** the prior's influence, meaning MAP and MLE estimates **converge** to the same answer with enough data — a commonly asked "when do these two techniques actually differ in practice" follow-up (answer: primarily in low-data regimes, where the prior's regularizing effect meaningfully matters).
+
+---
+
+## 15. Gradients & Optimization Basics
+
+**The gradient**: For a multivariable function `f(θ)`, the gradient `∇f(θ)` is the vector of **partial derivatives** with respect to each parameter — it points in the direction of **steepest ascent** (the direction in which `f` increases fastest from the current point).
+
+**Gradient descent — the core optimization procedure underlying nearly every model-fitting algorithm in this series (commonly asked to state the update rule precisely)**:
+```
+θ ← θ - η∇f(θ)
+```
+Since the gradient points toward steepest **increase**, moving in the **negative** gradient direction (subtracting it) moves toward decreasing `f` — repeating this update iteratively converges toward a **minimum** of `f` (the loss function, in ML contexts).
+
+**The learning rate `η` — the single most commonly discussed practical hyperparameter in this section**: Too **large** an `η` can cause the update to **overshoot** the minimum, potentially **diverging** (the loss increasing rather than decreasing across iterations) rather than converging; too **small** an `η` converges reliably but **very slowly**, requiring many more iterations to reach an acceptable minimum — this exact trade-off, and the various techniques for managing it (learning rate schedules, adaptive methods), is expanded in much greater depth in the dedicated Deep Learning Training Dynamics guide later in this series.
+
+**Batch, stochastic, and mini-batch gradient descent (commonly asked to distinguish, foundational vocabulary for essentially every subsequent guide)**:
+- **Batch (full-batch)**: Computes the gradient using the **entire** training dataset before each single update — accurate gradient estimates, but computationally expensive per step and infeasible for very large datasets that don't fit in memory.
+- **Stochastic (SGD)**: Computes the gradient using just **one** randomly-selected training example per update — extremely noisy individual gradient estimates, but each step is very cheap, and the noise can actually **help** escape shallow local minima (expanded on in the Deep Learning guide).
+- **Mini-batch**: The practical middle ground almost universally used in real training — computes the gradient over a **small, random subset** (e.g., 32-256 examples) per update, balancing gradient-estimate stability against per-step computational cost.
+
+**Interview trap**: *"Does gradient descent always converge to the global minimum?"* Only guaranteed for **convex** functions (Section 16) — for non-convex loss surfaces (essentially all neural network loss functions), gradient descent can converge to a **local minimum**, a **saddle point**, or a flat plateau region, with no guarantee of finding the true global minimum — this is precisely why optimizer choice, learning rate scheduling, and initialization strategy (all covered in depth in the Deep Learning Training Dynamics guide) matter so much in practice for genuinely non-convex deep learning problems.
+
+---
+
+## 16. Convexity
+
+**Definition (commonly asked to state, at least intuitively)**: A function is **convex** if a line segment connecting any two points on its graph lies **on or above** the graph itself — intuitively, a convex function has a single "bowl" shape with **no** local minima other than the (single) global minimum.
+
+**Why convexity matters enormously for optimization (the core, commonly asked payoff)**: For a convex loss function, gradient descent (Section 15) is **guaranteed** to converge to the **global** minimum (given an appropriately chosen learning rate) — there are no other local minima to get trapped in. **Linear regression's squared-error loss and logistic regression's cross-entropy loss are both convex** — this is precisely why these classical models can be reliably, deterministically optimized to their true optimal solution, in sharp contrast to neural networks' generally **non-convex** loss surfaces (Section 15's trap), where such guarantees don't hold.
+
+**Interview trap**: *"If linear regression's loss function is convex and therefore has a unique global minimum, why would you ever need gradient descent instead of just solving for it directly?"* For linear regression specifically, a **closed-form solution** does exist (the normal equation, `w = (XᵀX)⁻¹Xᵀy`, from Section 2) — but computing a matrix inverse is `O(d³)` in the number of features `d` (directly reapplying general algorithmic-complexity reasoning), which becomes **computationally prohibitive** for very high-dimensional data — gradient descent, despite being iterative rather than a one-shot closed-form solve, scales far better to large `d` and large datasets, which is exactly why it's the practically preferred approach even for a problem that technically has an exact analytical solution — a commonly asked "why not just solve it directly" question expanded fully in the dedicated Regression guide.
+
+---
+
+## 17. Rapid-Fire Interview Q&A
+
+**Q: Why does L1 regularization tend to produce sparse (exactly-zero) weights while L2 doesn't?**
+Geometrically, L1's constraint region is a diamond with sharp corners on the axes, while L2's is a smooth circle — optimal solutions are far more likely to land exactly on one of L1's corners (where a coordinate is exactly zero) than anywhere on L2's smooth boundary.
+
+**Q: What's the difference between a PMF and a PDF?**
+A PMF gives an actual probability directly (`P(X=x)`) for discrete variables; a PDF gives a density for continuous variables, where probability is instead the area under the curve over an interval — a PDF's value at a single point is not itself a probability and can exceed 1.
+
+**Q: In the medical-test Bayes' theorem example, why can a 95%-accurate test still only imply a 16% chance of actually having a rare disease after a positive result?**
+Because the disease's low base rate (prior) means the absolute number of false positives from the large healthy population outweighs the true positives from the small diseased population — the base rate fallacy, illustrating why the prior matters as much as the test's own accuracy.
+
+**Q: What does a p-value actually represent?**
+The probability of observing data at least as extreme as what was seen, assuming the null hypothesis is true — it is not the probability that the null hypothesis is true, and a small p-value doesn't imply a large or practically meaningful effect size.
+
+**Q: What's the correct interpretation of a 95% confidence interval?**
+That the interval-construction procedure would capture the true population parameter in about 95% of repeated samples — not that there's a 95% probability the true value lies in this one specific, already-computed interval.
+
+**Q: Derive why linear regression's loss function is the sum of squared errors.**
+Assuming Gaussian-distributed noise around a linear relationship, maximizing the log-likelihood of the observed data over the model's weights reduces exactly to minimizing the sum of squared errors — the loss function is the direct mathematical consequence of the Gaussian noise assumption via MLE.
+
+**Q: How does MAP estimation with a Gaussian prior relate to L2 regularization?**
+Maximizing the log-posterior under a zero-centered Gaussian prior on the weights yields the squared-error loss plus a penalty term proportional to the sum of squared weights — exactly the L2 regularization penalty — meaning L2 regularization is mathematically equivalent to MAP estimation with a Gaussian prior belief that weights should be small.
+
+**Q: Why is mini-batch gradient descent used almost universally in practice, rather than full-batch or purely stochastic gradient descent?**
+It balances gradient-estimate stability (full-batch's advantage) against low per-step computational cost (stochastic's advantage), making it the practical default for training on large datasets.
+
+**Q: Does gradient descent always find the global minimum?**
+Only guaranteed for convex functions; for non-convex loss surfaces (essentially all neural networks), it can converge to a local minimum, saddle point, or plateau instead, with no guarantee of reaching the true global minimum.
+
+---
+
+## Suggested Study Approach
+1. Be able to derive, from memory, why Gaussian-noise-assumption MLE reduces to squared-error loss (Section 13), and why Gaussian-prior MAP reduces to L2 regularization (Section 14) — these two derivations are the single highest-value thing in this entire guide, since they demonstrate you understand *why* the rest of this ML series' loss functions look the way they do, rather than having memorized them as disconnected facts.
+2. Practice precisely distinguishing p-values from posterior probabilities (Section 10) and correctly stating what a confidence interval actually claims (Section 11) — both are extremely commonly misinterpreted even by experienced practitioners, making precise, correct answers a strong differentiating signal.
+3. Rehearse the Type I/Type II error trade-off and be ready to connect it explicitly to the precision/recall trade-off from classification metrics (a later guide in this series) — interviewers frequently reward candidates who can draw this parallel unprompted.
+4. Make sure the L1-vs-L2 geometric explanation (diamond vs. circle constraint regions, Section 2) is ready to sketch or describe verbally — it's one of the most consistently asked "explain this visually" questions in ML interviews.
+5. Be ready to name at least two specific mechanisms behind spurious correlation (confounding, reverse causation, selection bias) rather than only citing "correlation isn't causation" as an unexplained slogan — specificity here is what separates a strong answer from a superficial one.
